@@ -45,6 +45,7 @@ export default function Planner({
   }, [plan]);
 
   const dayMeals = plan[selected] ?? [];
+  const recs = useMemo(() => recommend(recipes, inventory).slice(0, 4), [recipes, inventory]);
 
   function addMeal(title: string, recipeId: string | null) {
     if (!title.trim()) return;
@@ -56,9 +57,22 @@ export default function Planner({
     setPlan((p) => ({ ...p, [selected]: (p[selected] ?? []).filter((m) => m.id !== id) }));
   }
 
-  const recs = useMemo(() => recommend(recipes, inventory).slice(0, 4), [recipes, inventory]);
+  // recommend & generate full: fill every empty day with a suggested recipe
+  function generateFull() {
+    if (recs.length === 0) return;
+    setPlan((p) => {
+      const next = { ...p };
+      weekDates.forEach((iso, i) => {
+        if ((next[iso] ?? []).length === 0) {
+          const r = recs[i % recs.length].recipe;
+          next[iso] = [{ id: `gen-${iso}-${i}`, title: r.title, recipeId: r.id }];
+        }
+      });
+      return next;
+    });
+  }
 
-  // Missing ingredients across the day's recipe-backed meals.
+  // missing ingredients across the day's recipe-backed meals
   const missing = useMemo(() => {
     const set = new Set<string>();
     for (const m of dayMeals) {
@@ -108,6 +122,15 @@ export default function Planner({
           );
         })}
       </div>
+
+      {recs.length > 0 && (
+        <button
+          onClick={generateFull}
+          className="mt-3 w-full rounded-2xl border border-brand/25 bg-brand-soft py-2.5 text-sm font-bold text-brand-dark transition active:scale-[0.99]"
+        >
+          ✨ Generate a full week from your pantry
+        </button>
+      )}
 
       {/* planned meals */}
       <h2 className="mb-2 mt-6 text-sm font-bold text-ink/70">Planned meals</h2>
@@ -162,7 +185,7 @@ export default function Planner({
             onClick={addToShoppingList}
             className="mt-3 w-full rounded-xl bg-brand py-2.5 text-sm font-bold text-white transition active:scale-[0.99]"
           >
-            Add to shopping list
+            Add missing to shopping list
           </button>
           {addedMsg && <p className="mt-2 text-center text-xs font-medium text-brand">{addedMsg}</p>}
         </div>

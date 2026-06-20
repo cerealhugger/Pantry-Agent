@@ -20,7 +20,7 @@ export default async function PlannerPage() {
 
   return (
     <main className="px-5 pt-5">
-      <h1 className="text-2xl font-extrabold tracking-tight text-ink">Diet Planner</h1>
+      <h1 className="text-2xl font-extrabold tracking-tight text-ink">Meal Plan</h1>
       <p className="mb-5 mt-1 text-sm text-muted">
         Plan the week — we prioritize what&apos;s expiring and flag what you still need to buy.
       </p>

@@ -1,10 +1,10 @@
 import Link from "next/link";
 
 const actions = [
-  { href: "/scan", emoji: "📸", title: "Scan receipt", desc: "Add groceries in seconds", tint: "bg-brand-soft" },
+  { href: "/scan", emoji: "📸", title: "Scan receipt", desc: "Add groceries fast", tint: "bg-brand-soft" },
   { href: "/inventory", emoji: "🧊", title: "My pantry", desc: "Sorted by expiry", tint: "bg-amber/20" },
-  { href: "/recipes", emoji: "🍳", title: "Recipes", desc: "Use up what's expiring", tint: "bg-coral/15" },
-  { href: "/import", emoji: "🔗", title: "Import recipe", desc: "From a link you trust", tint: "bg-brand-soft" },
+  { href: "/planner", emoji: "📅", title: "Meal plan", desc: "Plan the week", tint: "bg-coral/15" },
+  { href: "/shopping", emoji: "🛒", title: "Shopping", desc: "Buy what's missing", tint: "bg-brand-soft" },
 ];
 
 function Step({ e, l }: { e: string; l: string }) {
