@@ -16,6 +16,7 @@ export type Ingredient = {
   name: string;
   qty: number | null;
   unit: string | null;
+  raw: string | null;   // original ingredient line as written, e.g. "black pepper to taste"
 };
 
 export type Recipe = {
@@ -27,9 +28,30 @@ export type Recipe = {
   calories_per_serving: number | null;
   servings: number | null;
   tags: string[];
-  source_type: "seed" | "manual" | "youtube" | "xiaohongshu";
+  source_type: "seed" | "manual" | "youtube" | "web_recipe" | "xiaohongshu";
   source_url: string | null;
   created_at: string;
+};
+
+export type RecipeDraft = Omit<Recipe, "id" | "user_id" | "created_at">;
+
+export type BrowserbaseActionLogEntry = {
+  step: number;
+  action: string;
+  result: string;
+};
+
+export type BrowserbaseImportResult = {
+  status: "succeeded" | "failed";
+  inputUrl: string;
+  importType: "recipe_url";
+  extractionMode: "fetch" | "stagehand";
+  browserbaseSessionId?: string;
+  browserbaseReplayUrl?: string;
+  browserbaseLiveUrl?: string;
+  actionLog: BrowserbaseActionLogEntry[];
+  recipe?: RecipeDraft;
+  errorMessage?: string;
 };
 
 export type DietLog = {
