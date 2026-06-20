@@ -3,7 +3,7 @@
 import { useEffect, useState } from "react";
 import { createClient } from "@supabase/supabase-js";
 import type { Recipe, InventoryItem, Ingredient } from "@/lib/types";
-import type { PlanEntry, MealSlot } from "@/app/api/planner/route";
+import type { PlanEntry, MealSlot, IngredientShortage } from "@/app/api/planner/route";
 import type { MissingIngredient } from "@/app/api/shopping-list/route";
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -48,6 +48,7 @@ export default function PlannerPage() {
   const [recipes, setRecipes] = useState<Recipe[]>([]);
   const [inventory, setInventory] = useState<InventoryItem[]>([]);
   const [plan, setPlan] = useState<Plan>({});
+  const [shortages, setShortages] = useState<IngredientShortage[]>([]);
   const [filling, setFilling] = useState(false);
   const [fillError, setFillError] = useState<string | null>(null);
   const [picker, setPicker] = useState<MealSlot | null>(null);
@@ -103,11 +104,21 @@ export default function PlannerPage() {
     setCartAdded(false);
   }
 
+  async function handleClearAll() {
+    if (!confirm("Clear all meals from this week's plan?")) return;
+    setPlan({});
+    setShortages([]);
+    setSaved(false);
+    setCartAdded(false);
+    await supabase.from("meal_plans").delete().eq("user_id", "demo").eq("week_start", weekStart);
+  }
+
   async function handleAutoFill() {
     setFilling(true);
     setSaved(false);
     setCartAdded(false);
     setFillError(null);
+    setShortages([]);
     const locked: PlanEntry[] = [];
     const empty: MealSlot[] = [];
     DAYS.forEach((day) => {
@@ -130,6 +141,7 @@ export default function PlannerPage() {
         p[`${e.day}-${e.meal}`] = { ...e, locked: e.locked ?? false };
       });
       setPlan(p);
+      setShortages(data.shortages ?? []);
       setSaved(true);
     } else {
       setFillError(data.error ?? "Auto-fill failed");
@@ -193,11 +205,38 @@ export default function PlannerPage() {
             className="px-4 py-2 rounded-xl border border-gray-200 text-sm font-semibold text-gray-700 hover:border-gray-400">
             Save
           </button>
+          <button onClick={handleClearAll}
+            className="px-4 py-2 rounded-xl border border-red-200 text-sm font-semibold text-red-500 hover:border-red-400 hover:bg-red-50">
+            Clear all
+          </button>
         </div>
       </div>
 
       {saved && <p className="mb-3 text-sm text-green-600 font-medium">✓ Plan saved</p>}
       {fillError && <p className="mb-3 text-sm text-red-600 font-medium">Error: {fillError}</p>}
+
+      {/* Ingredient shortage warnings from AI */}
+      {shortages.length > 0 && (
+        <div className="mb-4 rounded-xl border border-yellow-300 bg-yellow-50 px-4 py-4">
+          <p className="text-sm font-semibold text-yellow-800 mb-2">
+            ⚠ AI detected {shortages.length} potential ingredient shortage{shortages.length !== 1 ? "s" : ""} this week
+          </p>
+          <ul className="space-y-2">
+            {shortages.map((s) => (
+              <li key={s.ingredient} className="text-xs text-yellow-900">
+                <span className="font-semibold">{s.ingredient}</span>
+                {" — "}
+                {s.note}
+                {s.usedInMeals.length > 0 && (
+                  <span className="text-yellow-600 ml-1">
+                    (used in: {s.usedInMeals.join(", ")})
+                  </span>
+                )}
+              </li>
+            ))}
+          </ul>
+        </div>
+      )}
 
       {/* Calendar grid */}
       <div className="overflow-x-auto">

@@ -6,42 +6,51 @@ const supabase = createClient<any>(
   process.env.NEXT_PUBLIC_SUPABASE_URL!,
   process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!
 );
-import type { InventoryItem, Recipe } from "@/lib/types";
+import type { InventoryItem, Recipe, Ingredient } from "@/lib/types";
 
 const client = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY });
 
 export type MealSlot = { day: string; meal: "breakfast" | "lunch" | "dinner" };
 export type PlanEntry = MealSlot & { recipe_id: string; recipe_title: string; reason: string };
+export type IngredientShortage = {
+  ingredient: string;
+  usedInMeals: string[];
+  totalNeededEstimate: string;
+  inStock: string;
+  note: string;
+};
 
 export async function POST(req: NextRequest) {
-  // locked = slots the user already chose manually (don't touch these)
-  // empty  = slots we need Claude to fill
   const { locked, empty, weekStart } = await req.json() as {
     locked: PlanEntry[];
     empty: MealSlot[];
     weekStart: string;
   };
 
-  // Fetch inventory sorted by expiry
   const { data: inventory } = await supabase
     .from("inventory_items")
     .select("*")
     .eq("user_id", "demo")
     .order("expiry_date", { ascending: true });
 
-  // Fetch recipes — prefer imported over seed
   const { data: recipes } = await supabase
     .from("recipes")
     .select("id, title, ingredients, calories_per_serving, tags, source_type")
     .eq("user_id", "demo")
-    .order("source_type", { ascending: false }); // seed < web_recipe/youtube alphabetically
+    .order("source_type", { ascending: false });
 
   const inventoryList = (inventory as InventoryItem[])
-    .map((i) => `- ${i.name} (${i.quantity ?? "?"} ${i.unit ?? ""}, expires ${i.expiry_date})`)
+    .map((i) => `- ${i.name}: ${i.quantity ?? "?"} ${i.unit ?? "units"} (expires ${i.expiry_date ?? "unknown"})`)
     .join("\n");
 
+  // Include ingredient details so Claude can do quantity math
   const recipeList = (recipes as Recipe[])
-    .map((r) => `- id:${r.id} | "${r.title}" | ${r.source_type} | ${r.calories_per_serving ?? "?"}kcal | tags:${(r.tags as string[]).join(",")}`)
+    .map((r) => {
+      const ings = (r.ingredients as Ingredient[])
+        .map((ing) => `${ing.qty ?? "?"} ${ing.unit ?? ""} ${ing.name}`.trim())
+        .join(", ");
+      return `- id:${r.id} | "${r.title}" | ${r.source_type} | ${r.calories_per_serving ?? "?"}kcal | ingredients: [${ings}]`;
+    })
     .join("\n");
 
   const lockedSummary = locked.length
@@ -55,30 +64,44 @@ export async function POST(req: NextRequest) {
 RULES:
 1. Prioritize recipes that use soon-to-expire ingredients.
 2. Prefer imported/saved recipes (source_type = youtube or web_recipe) over seed recipes.
-3. Avoid repeating the same recipe in the same week (check locked meals).
+3. Avoid repeating the same recipe too many times — spread variety.
 4. Each suggestion must be a recipe from the list below — use its exact id.
+5. After choosing all meals, check if any ingredient is needed across multiple meals in quantities that may exceed what's in inventory. When units differ (e.g. inventory says "1 bag", recipe says "2 handfuls"), estimate equivalences and flag if the total usage likely exceeds stock. Only flag real concerns, not every ingredient.
 
 INVENTORY (sorted by expiry, soonest first):
 ${inventoryList}
 
-AVAILABLE RECIPES:
+AVAILABLE RECIPES (with ingredients per serving):
 ${recipeList}
 
-ALREADY PLANNED (do not repeat these):
+ALREADY PLANNED (locked, count these toward ingredient usage):
 ${lockedSummary}
 
 SLOTS TO FILL: ${emptySlots}
 
-Return ONLY a valid JSON array, one object per slot:
-[
-  {
-    "day": "Monday",
-    "meal": "lunch",
-    "recipe_id": "<exact id from list>",
-    "recipe_title": "<exact title>",
-    "reason": "<one short sentence: why this recipe for this slot>"
-  }
-]`;
+Return ONLY valid JSON in this exact shape (no markdown, no extra text):
+{
+  "plan": [
+    {
+      "day": "Monday",
+      "meal": "lunch",
+      "recipe_id": "<exact id>",
+      "recipe_title": "<exact title>",
+      "reason": "<one sentence: why this slot>"
+    }
+  ],
+  "shortages": [
+    {
+      "ingredient": "<ingredient name>",
+      "usedInMeals": ["Monday lunch", "Wednesday dinner"],
+      "totalNeededEstimate": "<e.g. ~600g total>",
+      "inStock": "<e.g. 200g>",
+      "note": "<one sentence explaining the shortage or unit estimation>"
+    }
+  ]
+}
+
+If no shortages are detected, return "shortages": [].`;
 
   const message = await client.messages.create({
     model: "claude-sonnet-4-6",
@@ -88,25 +111,27 @@ Return ONLY a valid JSON array, one object per slot:
 
   const text = message.content[0].type === "text" ? message.content[0].text : "";
   console.log("Claude planner stop_reason:", message.stop_reason);
-  console.log("Claude planner raw:", text.slice(0, 300));
+  console.log("Claude planner raw:", text.slice(0, 400));
 
-  const match = text.match(/\[[\s\S]*\]/);
+  // Extract the outermost JSON object
+  const match = text.match(/\{[\s\S]*\}/);
   if (!match) {
-    console.error("No JSON array in Claude response");
+    console.error("No JSON object in Claude response");
     return NextResponse.json({ error: "Claude returned invalid JSON", raw: text }, { status: 500 });
   }
 
-  let suggestions: PlanEntry[];
+  let parsed: { plan: PlanEntry[]; shortages: IngredientShortage[] };
   try {
-    suggestions = JSON.parse(match[0]) as PlanEntry[];
+    parsed = JSON.parse(match[0]);
   } catch (e) {
     console.error("JSON parse failed:", e);
     return NextResponse.json({ error: "JSON parse failed", raw: match[0].slice(0, 200) }, { status: 500 });
   }
 
+  const suggestions = parsed.plan ?? [];
+  const shortages = parsed.shortages ?? [];
   const fullPlan = [...locked, ...suggestions];
 
-  // Delete existing plan for this week then insert fresh (avoids needing unique constraint)
   await supabase.from("meal_plans").delete().eq("user_id", "demo").eq("week_start", weekStart);
   const { error: insertError } = await supabase.from("meal_plans").insert({
     user_id: "demo",
@@ -115,5 +140,5 @@ Return ONLY a valid JSON array, one object per slot:
   });
   if (insertError) console.error("meal_plans insert error:", insertError);
 
-  return NextResponse.json({ plan: fullPlan });
+  return NextResponse.json({ plan: fullPlan, shortages });
 }
