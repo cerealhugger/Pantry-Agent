@@ -16,18 +16,15 @@ function parseQuantity(text: string): { quantity: number | null; unit: string | 
   const trimmed = text.trim();
   if (!trimmed) return { quantity: null, unit: null };
 
-  // pure number → quantity only
   const num = parseFloat(trimmed);
   if (!isNaN(num) && String(num) === trimmed) return { quantity: num, unit: null };
 
-  // number + unit, e.g. "500g", "1.5 lb"
   const match = trimmed.match(/^([\d.]+)\s*(.+)$/);
   if (match) {
     const n = parseFloat(match[1]);
     if (!isNaN(n)) return { quantity: n, unit: match[2].trim() };
   }
 
-  // pure text like "一把" → store in unit, quantity null
   return { quantity: null, unit: trimmed };
 }
 
@@ -105,7 +102,6 @@ export default function ScanPage() {
       const expiry = new Date();
       expiry.setDate(expiry.getDate() + item.estimated_shelf_life_days);
 
-      // merge quantityText + unit into structured fields
       const combined = [item.quantityText, item.unit].filter(Boolean).join(" ").trim();
       const { quantity, unit } = parseQuantity(combined || item.quantityText);
 
@@ -136,24 +132,27 @@ export default function ScanPage() {
   const selectedCount = items.filter((i) => i.selected).length;
 
   return (
-    <main className="max-w-xl mx-auto px-4 py-8">
-      <h1 className="text-2xl font-bold text-gray-900 mb-2">Scan Receipt</h1>
-      <p className="text-gray-500 text-sm mb-6">
-        Take a photo of your grocery receipt — Claude extracts the food items.
-        Edit any field before saving.
+    <main className="px-5 pt-5">
+      <h1 className="text-2xl font-extrabold tracking-tight text-ink">Scan a receipt</h1>
+      <p className="mb-5 mt-1 text-sm text-muted">
+        Snap your grocery receipt — Claude reads the items and estimates shelf life. Edit anything before saving.
       </p>
 
       {/* Upload area */}
       <div
         onClick={() => inputRef.current?.click()}
-        className="border-2 border-dashed border-gray-300 rounded-xl p-6 text-center cursor-pointer hover:border-gray-400 transition-colors"
+        className="cursor-pointer rounded-3xl border-2 border-dashed border-brand/35 bg-white p-6 text-center transition-colors hover:border-brand/70"
       >
         {preview ? (
-          <img src={preview} alt="receipt" className="mx-auto max-h-56 object-contain rounded-lg" />
+          // eslint-disable-next-line @next/next/no-img-element
+          <img src={preview} alt="receipt" className="mx-auto max-h-56 rounded-xl object-contain" />
         ) : (
-          <div className="text-gray-400">
-            <div className="text-4xl mb-2">📷</div>
-            <p className="text-sm">Tap to take a photo or upload an image</p>
+          <div className="py-4">
+            <div className="mx-auto mb-3 flex h-14 w-14 items-center justify-center rounded-2xl bg-brand-soft text-3xl">
+              📸
+            </div>
+            <p className="text-sm font-medium text-ink">Tap to take a photo or upload</p>
+            <p className="mt-0.5 text-xs text-muted">A photo of your receipt</p>
           </div>
         )}
       </div>
@@ -170,66 +169,67 @@ export default function ScanPage() {
         <button
           onClick={handleScan}
           disabled={scanning}
-          className="mt-4 w-full py-3 rounded-xl bg-gray-900 text-white font-semibold disabled:opacity-50"
+          className="mt-4 w-full rounded-2xl bg-brand py-3.5 font-bold text-white shadow-md shadow-brand/25 transition active:scale-[0.99] disabled:opacity-50"
         >
-          {scanning ? "Scanning…" : "Scan with Claude"}
+          {scanning ? "Reading your receipt…" : "✨ Scan with Claude"}
         </button>
       )}
 
-      {error && <p className="mt-3 text-sm text-red-600">{error}</p>}
+      {error && (
+        <p className="mt-3 rounded-xl bg-coral/10 px-3 py-2 text-sm font-medium text-coral">{error}</p>
+      )}
 
       {/* Editable item list */}
       {items.length > 0 && (
-        <div className="mt-6 space-y-3">
-          <p className="text-sm text-gray-500">
-            Edit name / amount before saving. Tap the checkbox to skip an item.
+        <div className="mt-6 space-y-2.5">
+          <p className="text-sm font-semibold text-ink">
+            Found {items.length} item{items.length !== 1 ? "s" : ""}{" "}
+            <span className="font-normal text-muted">· edit or untick before saving</span>
           </p>
 
           {items.map((item, i) => (
             <div
               key={i}
-              className={`rounded-xl border px-4 py-3 transition-opacity ${
-                item.selected ? "border-gray-200 bg-white" : "border-gray-100 bg-gray-50 opacity-40"
+              className={`rounded-2xl border border-black/5 bg-white px-3.5 py-3 transition ${
+                item.selected ? "shadow-sm" : "opacity-40"
               }`}
             >
               <div className="flex items-start gap-3">
-                {/* checkbox */}
                 <button
                   onClick={() => updateItem(setItems, i, { selected: !item.selected })}
-                  className={`mt-1 w-5 h-5 rounded-full border-2 flex-shrink-0 ${
-                    item.selected ? "bg-gray-900 border-gray-900" : "border-gray-300"
+                  className={`mt-0.5 flex h-5 w-5 flex-shrink-0 items-center justify-center rounded-full border-2 text-[11px] text-white ${
+                    item.selected ? "border-brand bg-brand" : "border-black/20"
                   }`}
-                />
+                >
+                  {item.selected ? "✓" : ""}
+                </button>
 
                 <div className="flex-1 space-y-2">
-                  {/* name */}
                   <input
                     value={item.name}
                     onChange={(e) => updateItem(setItems, i, { name: e.target.value })}
                     onClick={(e) => e.stopPropagation()}
                     placeholder="Item name"
-                    className="w-full text-sm font-medium text-gray-900 border-b border-transparent hover:border-gray-200 focus:border-gray-400 focus:outline-none bg-transparent"
+                    className="w-full border-b border-transparent bg-transparent text-sm font-semibold text-ink hover:border-black/10 focus:border-brand focus:outline-none"
                   />
 
-                  <div className="flex gap-2">
-                    {/* quantity — free text */}
+                  <div className="flex items-center gap-2">
                     <input
                       value={item.quantityText}
                       onChange={(e) => updateItem(setItems, i, { quantityText: e.target.value })}
                       onClick={(e) => e.stopPropagation()}
                       placeholder="数量 e.g. 2、一把、500"
-                      className="w-32 text-sm text-gray-600 border-b border-transparent hover:border-gray-200 focus:border-gray-400 focus:outline-none bg-transparent"
+                      className="w-32 border-b border-transparent bg-transparent text-sm text-muted hover:border-black/10 focus:border-brand focus:outline-none"
                     />
-                    {/* unit */}
                     <input
                       value={item.unit}
                       onChange={(e) => updateItem(setItems, i, { unit: e.target.value })}
                       onClick={(e) => e.stopPropagation()}
                       placeholder="单位 e.g. g、pcs、袋"
-                      className="w-24 text-sm text-gray-600 border-b border-transparent hover:border-gray-200 focus:border-gray-400 focus:outline-none bg-transparent"
+                      className="w-24 border-b border-transparent bg-transparent text-sm text-muted hover:border-black/10 focus:border-brand focus:outline-none"
                     />
-                    <span className="ml-auto text-xs text-gray-400 self-end">
-                      {item.category} · ~{item.estimated_shelf_life_days}d
+                    <span className="ml-auto rounded-full bg-brand-soft px-2 py-0.5 text-[11px] font-medium text-brand-dark">
+                      ~{item.estimated_shelf_life_days}d
                     </span>
                   </div>
                 </div>
@@ -240,18 +240,18 @@ export default function ScanPage() {
           <button
             onClick={handleSave}
             disabled={saving || selectedCount === 0}
-            className="w-full py-3 rounded-xl bg-green-600 text-white font-semibold disabled:opacity-50"
+            className="mt-1 w-full rounded-2xl bg-brand py-3.5 font-bold text-white shadow-md shadow-brand/25 transition active:scale-[0.99] disabled:opacity-50"
           >
-            {saving ? "Saving…" : `Add ${selectedCount} item${selectedCount !== 1 ? "s" : ""} to Pantry`}
+            {saving ? "Saving…" : `Add ${selectedCount} item${selectedCount !== 1 ? "s" : ""} to pantry`}
           </button>
         </div>
       )}
 
       {saved && (
-        <div className="mt-4 rounded-xl bg-green-50 border border-green-200 px-4 py-3 text-green-700 text-sm font-medium">
-          ✓ Items added!{" "}
-          <a href="/inventory" className="underline">
-            View inventory →
+        <div className="mt-4 rounded-2xl border border-brand/20 bg-brand-soft px-4 py-3 text-sm font-medium text-brand-dark">
+          ✓ Added to your pantry!{" "}
+          <a href="/inventory" className="font-bold underline">
+            View pantry →
           </a>
         </div>
       )}

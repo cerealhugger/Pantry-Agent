@@ -591,7 +591,7 @@ their `web_imports` + replay links. During the live demo:
 
 Use this wording whenever explaining the Browserbase integration:
 
-> **Browserbase is the action layer of PantryPilot. Food information is scattered across
+> **Browserbase is the action layer of PantryAgent. Food information is scattered across
 > YouTube, recipe blogs, grocery stores, and nutrition pages. APIs don't exist for most of
 > that. Browserbase lets our agent use the web like a human: search, open pages, click
 > through dynamic interfaces, extract structured recipe and grocery data, persist sessions,

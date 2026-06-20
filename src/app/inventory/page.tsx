@@ -19,8 +19,11 @@ export default async function InventoryPage() {
   const items = await getInventory();
 
   return (
-    <main className="max-w-2xl mx-auto px-4 py-8">
-      <h1 className="text-2xl font-bold text-gray-900 mb-6">Pantry Inventory</h1>
+    <main className="px-5 pt-5">
+      <h1 className="text-2xl font-extrabold tracking-tight text-ink">Your Pantry</h1>
+      <p className="mb-5 mt-1 text-sm text-muted">
+        Sorted by what expires first — cook these before they go.
+      </p>
       <InventoryList items={items} />
     </main>
   );
