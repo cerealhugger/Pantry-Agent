@@ -11,7 +11,7 @@ import type { InventoryItem, Recipe, Ingredient } from "@/lib/types";
 const client = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY });
 
 export type MealSlot = { day: string; meal: "breakfast" | "lunch" | "dinner" };
-export type PlanEntry = MealSlot & { recipe_id: string; recipe_title: string; reason: string };
+export type PlanEntry = MealSlot & { recipe_id: string; recipe_title: string; reason: string; eaten?: boolean };
 export type IngredientShortage = {
   ingredient: string;
   usedInMeals: string[];

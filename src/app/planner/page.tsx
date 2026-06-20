@@ -34,7 +34,7 @@ function getNextMonday() {
 }
 
 type SlotKey = string;
-type Plan = Record<SlotKey, PlanEntry & { locked: boolean }>;
+type Plan = Record<SlotKey, PlanEntry & { locked: boolean; eaten?: boolean }>;
 
 // Compare recipe ingredients against inventory, return missing ones
 function computeMissing(
@@ -83,7 +83,7 @@ export default function PlannerPage() {
         if (data?.plan) {
           const p: Plan = {};
           // eslint-disable-next-line @typescript-eslint/no-explicit-any
-          data.plan.forEach((e: any) => { p[`${e.day}-${e.meal}`] = { ...e, locked: e.locked ?? true }; });
+          data.plan.forEach((e: any) => { p[`${e.day}-${e.meal}`] = { ...e, locked: e.locked ?? true, eaten: e.eaten ?? false }; });
           setPlan(p);
         }
       });
@@ -174,10 +174,11 @@ export default function PlannerPage() {
     setSaved(true);
   }
 
-  // Collect all missing ingredients across the whole plan
+  // Collect all missing ingredients across the whole plan (skip eaten meals)
   function getAllMissing(): MissingIngredient[] {
     const result: MissingIngredient[] = [];
     Object.values(plan).forEach((entry) => {
+      if (entry.eaten) return;
       const recipe = getRecipe(entry.recipe_id);
       if (!recipe) return;
       const missing = computeMissing(recipe, inventory);
@@ -224,6 +225,26 @@ export default function PlannerPage() {
     });
     setMealCartAdding(null);
     setMealCartAdded((prev) => ({ ...prev, [key]: true }));
+  }
+
+  async function handleEat(day: string, meal: string) {
+    const entry = slotEntry(day, meal);
+    if (!entry) return;
+    const res = await fetch("/api/planner/eat", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ recipe_id: entry.recipe_id, day, meal, weekStart }),
+    });
+    if (res.ok) {
+      setPlan((prev) => ({
+        ...prev,
+        [`${day}-${meal}`]: { ...prev[`${day}-${meal}`], eaten: true },
+      }));
+      // Refresh inventory after deduction
+      supabase.from("inventory_items").select("*").eq("user_id", "demo")
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        .then(({ data }: any) => setInventory(data ?? []));
+    }
   }
 
   const allMissing = recipes.length > 0 && inventory.length > 0 ? getAllMissing() : [];
@@ -298,7 +319,6 @@ export default function PlannerPage() {
             🛒 {allMissing.length} missing ingredient{allMissing.length !== 1 ? "s" : ""} this week
           </p>
           <div className="mt-2 flex flex-wrap gap-1.5">
-            {/* Dedupe by name */}
             {[...new Map(allMissing.map((m) => [m.name.toLowerCase(), m])).values()].map((m, mi) => (
               <span
                 key={`${m.name}-${mi}`}
@@ -337,14 +357,16 @@ export default function PlannerPage() {
               {MEALS.map((meal) => {
                 const entry = slotEntry(day, meal);
                 const recipe = entry ? getRecipe(entry.recipe_id) : null;
-                const missing = recipe ? computeMissing(recipe, inventory) : [];
+                const missing = recipe && !entry?.eaten ? computeMissing(recipe, inventory) : [];
 
                 return (
                   <div key={meal}>
                     {entry ? (
-                      <div className="relative rounded-2xl border border-black/5 bg-white px-3.5 py-3 shadow-sm">
+                      <div className={`relative rounded-2xl border px-3.5 py-3 shadow-sm transition ${
+                        entry.eaten ? "border-green-200 bg-green-50" : "border-black/5 bg-white"
+                      }`}>
                         <div className="flex gap-3">
-                          {recipe ? (
+                          {recipe && !entry.eaten ? (
                             <Link
                               href={`/recipes/${entry.recipe_id}`}
                               className="flex min-w-0 flex-1 gap-3 pr-5 transition active:scale-[0.99]"
@@ -371,15 +393,23 @@ export default function PlannerPage() {
                             </Link>
                           ) : (
                             <div className="flex min-w-0 flex-1 gap-3 pr-5">
-                              <span className="flex h-10 w-10 flex-shrink-0 items-center justify-center rounded-xl bg-amber/20 text-xl">
-                                {MEAL_EMOJI[meal]}
+                              <span className={`flex h-10 w-10 flex-shrink-0 items-center justify-center rounded-xl text-xl ${
+                                entry.eaten ? "bg-green-100" : "bg-amber/20"
+                              }`}>
+                                {recipe ? foodEmoji(entry.recipe_title, null) : MEAL_EMOJI[meal]}
                               </span>
                               <div className="min-w-0 flex-1">
                                 <p className="text-[10px] font-bold uppercase tracking-wide text-muted">
                                   {MEAL_EMOJI[meal]} {meal}
                                 </p>
                                 <p className="truncate font-semibold text-ink">{entry.recipe_title}</p>
-                                <p className="mt-0.5 text-[11px] text-muted">Recipe unavailable</p>
+                                {entry.eaten ? (
+                                  <p className="mt-0.5 text-[11px] font-semibold text-green-600">
+                                    ✓ Eaten · inventory updated
+                                  </p>
+                                ) : (
+                                  <p className="mt-0.5 text-[11px] text-muted">Recipe unavailable</p>
+                                )}
                               </div>
                             </div>
                           )}
@@ -392,36 +422,59 @@ export default function PlannerPage() {
                           </button>
                         </div>
 
-                        {/* pantry check: enough vs not enough + one-tap add missing */}
-                        {recipe && (
+                        {/* pantry check / eaten status */}
+                        {entry.eaten ? (
+                          <div className="mt-2.5 border-t border-green-200 pt-2.5">
+                            <p className="flex items-center gap-1.5 text-xs font-semibold text-green-600">
+                              <span className="flex h-4 w-4 items-center justify-center rounded-full bg-green-600 text-[10px] text-white">✓</span>
+                              Eaten · ingredients deducted from pantry
+                            </p>
+                          </div>
+                        ) : recipe ? (
                           <div className="mt-2.5 border-t border-black/5 pt-2.5">
                             {missing.length === 0 ? (
-                              <p className="flex items-center gap-1.5 text-xs font-semibold text-brand">
-                                <span className="flex h-4 w-4 items-center justify-center rounded-full bg-brand text-[10px] text-white">
-                                  ✓
-                                </span>
-                                Pantry has everything
-                              </p>
+                              <div className="flex items-center justify-between">
+                                <p className="flex items-center gap-1.5 text-xs font-semibold text-brand">
+                                  <span className="flex h-4 w-4 items-center justify-center rounded-full bg-brand text-[10px] text-white">
+                                    ✓
+                                  </span>
+                                  Pantry has everything
+                                </p>
+                                <button
+                                  onClick={() => handleEat(day, meal)}
+                                  className="rounded-full bg-green-600 px-3 py-1 text-[11px] font-bold text-white transition hover:bg-green-500 active:scale-95"
+                                >
+                                  ✓ Ate this
+                                </button>
+                              </div>
                             ) : (
                               <>
                                 <div className="flex items-center justify-between gap-2">
                                   <p className="text-xs font-bold text-coral">
                                     Need {missing.length} item{missing.length !== 1 ? "s" : ""}
                                   </p>
-                                  <button
-                                    onClick={() => handleAddMealMissing(day, meal, recipe, missing)}
-                                    disabled={
-                                      mealCartAdding === `${day}-${meal}` ||
-                                      mealCartAdded[`${day}-${meal}`]
-                                    }
-                                    className="flex-shrink-0 rounded-full bg-brand px-3 py-1 text-[11px] font-bold text-white transition active:scale-95 disabled:opacity-60"
-                                  >
-                                    {mealCartAdded[`${day}-${meal}`]
-                                      ? "✓ Added"
-                                      : mealCartAdding === `${day}-${meal}`
-                                      ? "Adding…"
-                                      : "+ Shopping list"}
-                                  </button>
+                                  <div className="flex gap-2">
+                                    <button
+                                      onClick={() => handleAddMealMissing(day, meal, recipe, missing)}
+                                      disabled={
+                                        mealCartAdding === `${day}-${meal}` ||
+                                        mealCartAdded[`${day}-${meal}`]
+                                      }
+                                      className="flex-shrink-0 rounded-full bg-brand px-3 py-1 text-[11px] font-bold text-white transition active:scale-95 disabled:opacity-60"
+                                    >
+                                      {mealCartAdded[`${day}-${meal}`]
+                                        ? "✓ Added"
+                                        : mealCartAdding === `${day}-${meal}`
+                                        ? "Adding…"
+                                        : "+ Shopping list"}
+                                    </button>
+                                    <button
+                                      onClick={() => handleEat(day, meal)}
+                                      className="flex-shrink-0 rounded-full bg-green-600 px-3 py-1 text-[11px] font-bold text-white transition hover:bg-green-500 active:scale-95"
+                                    >
+                                      ✓ Ate this
+                                    </button>
+                                  </div>
                                 </div>
                                 <div className="mt-1.5 flex flex-wrap gap-1">
                                   {missing.map((m, mi) => (
@@ -436,7 +489,7 @@ export default function PlannerPage() {
                               </>
                             )}
                           </div>
-                        )}
+                        ) : null}
                       </div>
                     ) : (
                       <button
