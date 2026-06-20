@@ -263,6 +263,14 @@ export default function PlannerPage() {
                       {entry ? (
                         <div className={`rounded-xl p-2.5 text-xs group relative min-h-[72px] ${entry.locked ? "bg-gray-900 text-white" : "bg-blue-50 border border-blue-200 text-blue-900"}`}>
                           <p className="font-semibold leading-snug pr-4">{entry.recipe_title}</p>
+                          {recipe && (
+                            <p className={`mt-0.5 text-[10px] ${entry.locked ? "text-gray-300" : "text-blue-600"}`}>
+                              {(recipe.source_metadata?.nutrition?.estimatedCaloriesPerServing ?? recipe.calories_per_serving) ?? "?"} kcal
+                              {recipe.source_metadata?.nutrition
+                                ? ` · ${recipe.source_metadata.nutrition.confidence} ✓`
+                                : ""}
+                            </p>
+                          )}
                           {!entry.locked && (
                             <p className="mt-1 text-blue-600 opacity-80 text-[10px] leading-tight">{entry.reason}</p>
                           )}
@@ -348,7 +356,12 @@ export default function PlannerPage() {
                           <span className="text-xs text-orange-500 font-medium">{missing.length} missing</span>
                         )}
                       </div>
-                      <p className="text-xs text-gray-400 mt-0.5">{r.source_type} · {r.calories_per_serving ?? "?"}kcal</p>
+                      <p className="text-xs text-gray-400 mt-0.5">
+                        {r.source_type} ·{" "}
+                        {r.source_metadata?.nutrition
+                          ? `${r.source_metadata.nutrition.estimatedCaloriesPerServing ?? "?"}kcal · ${r.source_metadata.nutrition.confidence} ✓`
+                          : `${r.calories_per_serving ?? "?"}kcal`}
+                      </p>
                     </button>
                   </li>
                 );

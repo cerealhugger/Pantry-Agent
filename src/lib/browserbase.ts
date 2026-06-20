@@ -6,6 +6,8 @@ import { z } from "zod";
 import type {
   BrowserbaseActionLogEntry,
   BrowserbaseImportResult,
+  NutritionEvidence,
+  NutritionPer100g,
   RecipeDraft,
 } from "./types";
 
@@ -323,4 +325,257 @@ export async function importRecipeWithBrowserbase(input: unknown): Promise<Brows
   } finally {
     await stagehand?.close().catch(() => undefined);
   }
+}
+
+// ─── Workflow D — nutrition facts verification ───────────────────────────────
+//
+// Escalation: Browserbase Search API discovers nutrition-fact pages, then the
+// Fetch API extracts per-100g macros as structured JSON. Each ingredient ends
+// up with calories/protein/carbs/fat, a source URL, and a confidence score so a
+// meal plan can show browser-extracted evidence instead of a pure AI guess.
+
+const nutritionResultSchema = z.object({
+  food: z.string().trim().nullable(),
+  basis: z.string().trim().nullable(),
+  serving_size_g: z.number().finite().positive().nullable(),
+  calories: z.number().finite().nonnegative().nullable(),
+  protein_g: z.number().finite().nonnegative().nullable(),
+  carbs_g: z.number().finite().nonnegative().nullable(),
+  fat_g: z.number().finite().nonnegative().nullable(),
+});
+
+const nutritionJsonSchema = {
+  type: "object",
+  additionalProperties: false,
+  properties: {
+    food: {
+      type: ["string", "null"],
+      description: "The food/ingredient this nutrition panel describes",
+    },
+    basis: {
+      type: ["string", "null"],
+      description:
+        "The serving basis the numbers below refer to, copied from the page, e.g. 'per 100g', 'per 1 cup (240g)'",
+    },
+    serving_size_g: {
+      type: ["number", "null"],
+      description: "The serving size in grams that the numbers refer to, if stated",
+    },
+    calories: {
+      type: ["number", "null"],
+      description: "Energy in kcal for the stated serving basis",
+    },
+    protein_g: { type: ["number", "null"], description: "Protein in grams" },
+    carbs_g: {
+      type: ["number", "null"],
+      description: "Total carbohydrate in grams",
+    },
+    fat_g: { type: ["number", "null"], description: "Total fat in grams" },
+  },
+  required: [
+    "food",
+    "basis",
+    "serving_size_g",
+    "calories",
+    "protein_g",
+    "carbs_g",
+    "fat_g",
+  ],
+} as const;
+
+const TRUSTED_NUTRITION_DOMAINS = [
+  "usda.gov",
+  "nal.usda.gov",
+  "fdc.nal.usda.gov",
+  "nutritionix.com",
+  "fatsecret.com",
+  "myfitnesspal.com",
+  "nutritionvalue.org",
+  "eatthismuch.com",
+  "verywellfit.com",
+  "self.com",
+  "nutritiondata.self.com",
+  "calorieking.com",
+];
+
+function hostOf(url: string): string {
+  try {
+    return new URL(url).hostname.toLowerCase();
+  } catch {
+    return "";
+  }
+}
+
+function isTrustedNutritionHost(host: string): boolean {
+  return TRUSTED_NUTRITION_DOMAINS.some((domain) => host.endsWith(domain));
+}
+
+// Convert whatever serving basis the page reported into a clean per-100g panel.
+function toPer100g(value: z.infer<typeof nutritionResultSchema>): NutritionPer100g | null {
+  const grams =
+    value.serving_size_g && value.serving_size_g > 0
+      ? value.serving_size_g
+      : /\b100\s*g\b/i.test(value.basis ?? "")
+        ? 100
+        : null;
+  if (!grams || value.calories == null) return null;
+
+  const factor = 100 / grams;
+  const scale = (n: number | null) =>
+    n == null ? null : Math.round(n * factor * 10) / 10;
+
+  return {
+    calories: scale(value.calories),
+    protein_g: scale(value.protein_g),
+    carbs_g: scale(value.carbs_g),
+    fat_g: scale(value.fat_g),
+  };
+}
+
+function scoreNutritionConfidence(
+  host: string,
+  per100g: NutritionPer100g,
+): "high" | "medium" | "low" {
+  const hasCalories = per100g.calories != null;
+  const macroCount = [per100g.protein_g, per100g.carbs_g, per100g.fat_g].filter(
+    (v) => v != null,
+  ).length;
+  const trusted = isTrustedNutritionHost(host);
+
+  if (hasCalories && macroCount >= 2 && trusted) return "high";
+  if (hasCalories && (macroCount >= 2 || trusted)) return "medium";
+  return "low";
+}
+
+async function verifyOneIngredient(
+  browserbase: Browserbase,
+  ingredient: string,
+  addLog: (action: string, result: string) => void,
+): Promise<NutritionEvidence> {
+  const query = `${ingredient} nutrition facts calories protein carbs fat per 100g`;
+
+  let results: { url: string; title: string }[] = [];
+  try {
+    const search = await browserbase.search.web({ query, numResults: 6 });
+    results = (search.results ?? [])
+      .filter((r) => /^https?:\/\//i.test(r.url))
+      .map((r) => ({ url: r.url, title: r.title }));
+    addLog(`Search nutrition: ${ingredient}`, `Found ${results.length} candidate pages`);
+  } catch (error) {
+    addLog(`Search nutrition: ${ingredient}`, `Search failed: ${errorMessage(error)}`);
+    return {
+      ingredient,
+      status: "not_found",
+      per100g: null,
+      sourceUrl: null,
+      sourceTitle: null,
+      confidence: "low",
+      extractionMode: "none",
+      note: errorMessage(error),
+    };
+  }
+
+  if (results.length === 0) {
+    return {
+      ingredient,
+      status: "not_found",
+      per100g: null,
+      sourceUrl: null,
+      sourceTitle: null,
+      confidence: "low",
+      extractionMode: "search",
+      note: "No nutrition pages found",
+    };
+  }
+
+  // Prefer trusted nutrition databases, then fall back to the rest.
+  const ordered = [
+    ...results.filter((r) => isTrustedNutritionHost(hostOf(r.url))),
+    ...results.filter((r) => !isTrustedNutritionHost(hostOf(r.url))),
+  ];
+
+  for (const candidate of ordered.slice(0, 3)) {
+    const host = hostOf(candidate.url);
+    try {
+      const response = await browserbase.fetchAPI.create({
+        url: candidate.url,
+        allowRedirects: true,
+        format: "json",
+        schema: nutritionJsonSchema,
+      });
+
+      const parsed = nutritionResultSchema.safeParse(response.content);
+      if (!parsed.success || response.statusCode < 200 || response.statusCode >= 300) {
+        addLog(`Fetch ${host}`, `Skipped: no usable nutrition panel`);
+        continue;
+      }
+
+      const per100g = toPer100g(parsed.data);
+      if (!per100g || per100g.calories == null) {
+        addLog(`Fetch ${host}`, `Skipped: serving basis not convertible to 100g`);
+        continue;
+      }
+
+      const confidence = scoreNutritionConfidence(host, per100g);
+      addLog(
+        `Fetch ${host}`,
+        `Extracted ${per100g.calories} kcal/100g (confidence: ${confidence})`,
+      );
+      return {
+        ingredient,
+        status: "verified",
+        per100g,
+        sourceUrl: candidate.url,
+        sourceTitle: candidate.title,
+        confidence,
+        extractionMode: "search+fetch",
+      };
+    } catch (error) {
+      addLog(`Fetch ${host}`, `Skipped: ${errorMessage(error)}`);
+    }
+  }
+
+  return {
+    ingredient,
+    status: "not_found",
+    per100g: null,
+    sourceUrl: ordered[0]?.url ?? null,
+    sourceTitle: ordered[0]?.title ?? null,
+    confidence: "low",
+    extractionMode: "search",
+    note: "Found pages but could not extract per-100g facts",
+  };
+}
+
+export async function verifyIngredientNutrition(ingredients: string[]): Promise<{
+  evidence: NutritionEvidence[];
+  actionLog: BrowserbaseActionLogEntry[];
+  errorMessage?: string;
+}> {
+  const actionLog: BrowserbaseActionLogEntry[] = [];
+  const addLog = (action: string, result: string) => {
+    actionLog.push({ step: actionLog.length + 1, action, result });
+  };
+
+  const cleaned = [...new Set(ingredients.map((i) => i.trim().toLowerCase()))]
+    .filter(Boolean)
+    .slice(0, 8); // keep the demo fast and within the function time budget
+
+  if (cleaned.length === 0) {
+    return { evidence: [], actionLog, errorMessage: "No ingredients to verify" };
+  }
+
+  const apiKey = process.env.BROWSERBASE_API_KEY;
+  if (!apiKey) {
+    return { evidence: [], actionLog, errorMessage: "BROWSERBASE_API_KEY is not configured" };
+  }
+
+  const browserbase = new Browserbase({ apiKey });
+  const evidence: NutritionEvidence[] = [];
+  // Sequential keeps the action log readable and avoids hammering Search/Fetch.
+  for (const ingredient of cleaned) {
+    evidence.push(await verifyOneIngredient(browserbase, ingredient, addLog));
+  }
+
+  return { evidence, actionLog };
 }

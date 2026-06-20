@@ -31,6 +31,10 @@ export type Recipe = {
   source_type: "seed" | "manual" | "youtube" | "web_recipe" | "xiaohongshu";
   source_url: string | null;
   created_at: string;
+
+  // Optional Browserbase / nutrition metadata (may be absent on older rows)
+  extraction_confidence?: number | null;
+  source_metadata?: { nutrition?: SavedNutrition; [key: string]: unknown } | null;
 };
 
 export type RecipeDraft = Omit<Recipe, "id" | "user_id" | "created_at">;
@@ -52,6 +56,66 @@ export type BrowserbaseImportResult = {
   actionLog: BrowserbaseActionLogEntry[];
   recipe?: RecipeDraft;
   errorMessage?: string;
+};
+
+// ─── Nutrition verification (Browserbase Workflow D) ─────────────────────────
+
+export type NutritionPer100g = {
+  calories: number | null;   // kcal per 100g
+  protein_g: number | null;
+  carbs_g: number | null;
+  fat_g: number | null;
+};
+
+export type NutritionEvidence = {
+  ingredient: string;
+  status: "verified" | "not_found";
+  per100g: NutritionPer100g | null;
+  sourceUrl: string | null;
+  sourceTitle: string | null;
+  confidence: "high" | "medium" | "low";
+  extractionMode: "search+fetch" | "search" | "none";
+  note?: string;
+};
+
+export type NutritionVerificationResult = {
+  status: "succeeded" | "failed";
+  recipeTitle: string;
+  servings: number | null;
+  aiCaloriesPerServing: number | null;        // the recipe's original AI estimate
+  estimatedCaloriesPerServing: number | null; // reconciled from browser evidence
+  overallConfidence: "high" | "medium" | "low";
+  reasoning: string;
+  evidence: NutritionEvidence[];
+  actionLog: BrowserbaseActionLogEntry[];
+  errorMessage?: string;
+};
+
+// What we persist on a recipe row (recipes.source_metadata.nutrition)
+export type SavedNutrition = {
+  estimatedCaloriesPerServing: number | null;
+  confidence: "high" | "medium" | "low";
+  reasoning: string;
+  evidence: NutritionEvidence[];
+  verifiedAt: string;
+};
+
+export type WebImport = {
+  id: string;
+  user_id: string;
+  input_url: string | null;
+  input_query: string | null;
+  import_type: "recipe_url" | "youtube" | "grocery_lookup" | "nutrition_lookup";
+  status: "pending" | "running" | "succeeded" | "failed";
+  browserbase_session_id: string | null;
+  browserbase_replay_url: string | null;
+  browserbase_live_url: string | null;
+  extraction_mode: string | null;
+  action_log: BrowserbaseActionLogEntry[];
+  extracted_json: unknown;
+  error_message: string | null;
+  created_at: string;
+  completed_at: string | null;
 };
 
 export type DietLog = {
@@ -119,6 +183,11 @@ export type Database = {
         Row: ShoppingListItem;
         Insert: Omit<ShoppingListItem, "id" | "created_at">;
         Update: Partial<Omit<ShoppingListItem, "id" | "created_at">>;
+      };
+      web_imports: {
+        Row: WebImport;
+        Insert: Omit<WebImport, "id" | "created_at">;
+        Update: Partial<Omit<WebImport, "id" | "created_at">>;
       };
     };
   };

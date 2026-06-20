@@ -3,6 +3,7 @@ import type { Recipe, Ingredient } from "@/lib/types";
 import { notFound } from "next/navigation";
 import Link from "next/link";
 import DeleteRecipeButton from "./DeleteRecipeButton";
+import NutritionSection from "./NutritionSection";
 
 export const revalidate = 0;
 
@@ -73,6 +74,12 @@ export default async function RecipeDetailPage({ params }: { params: Promise<{ i
           ))}
         </ol>
       </section>
+
+      <NutritionSection
+        recipeId={recipe.id}
+        aiCaloriesPerServing={recipe.calories_per_serving}
+        saved={recipe.source_metadata?.nutrition ?? null}
+      />
 
       {recipe.source_url && recipe.source_type !== "seed" && (
         <section className="mt-8 rounded-xl border border-blue-100 bg-blue-50 p-4 text-sm">
