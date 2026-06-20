@@ -2,6 +2,7 @@ import { supabase } from "@/lib/supabase";
 import type { Recipe, Ingredient } from "@/lib/types";
 import { notFound } from "next/navigation";
 import Link from "next/link";
+import DeleteRecipeButton from "./DeleteRecipeButton";
 
 export const revalidate = 0;
 
@@ -25,9 +26,12 @@ export default async function RecipeDetailPage({ params }: { params: Promise<{ i
 
   return (
     <main className="max-w-2xl mx-auto px-4 py-8">
-      <Link href="/recipes" className="text-sm text-gray-400 hover:text-gray-600 mb-4 inline-block">
-        ← Back to Recipes
-      </Link>
+      <div className="flex items-center justify-between mb-4">
+        <Link href="/recipes" className="text-sm text-gray-400 hover:text-gray-600">
+          ← Back to Recipes
+        </Link>
+        <DeleteRecipeButton id={recipe.id} />
+      </div>
 
       <h1 className="text-2xl font-bold text-gray-900 mb-1">{recipe.title}</h1>
 

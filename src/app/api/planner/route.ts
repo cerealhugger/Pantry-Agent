@@ -82,23 +82,38 @@ Return ONLY a valid JSON array, one object per slot:
 
   const message = await client.messages.create({
     model: "claude-sonnet-4-6",
-    max_tokens: 1024,
+    max_tokens: 4096,
     messages: [{ role: "user", content: prompt }],
   });
 
   const text = message.content[0].type === "text" ? message.content[0].text : "";
+  console.log("Claude planner stop_reason:", message.stop_reason);
+  console.log("Claude planner raw:", text.slice(0, 300));
+
   const match = text.match(/\[[\s\S]*\]/);
-  if (!match) return NextResponse.json({ error: "Claude returned invalid JSON" }, { status: 500 });
+  if (!match) {
+    console.error("No JSON array in Claude response");
+    return NextResponse.json({ error: "Claude returned invalid JSON", raw: text }, { status: 500 });
+  }
 
-  const suggestions = JSON.parse(match[0]) as PlanEntry[];
+  let suggestions: PlanEntry[];
+  try {
+    suggestions = JSON.parse(match[0]) as PlanEntry[];
+  } catch (e) {
+    console.error("JSON parse failed:", e);
+    return NextResponse.json({ error: "JSON parse failed", raw: match[0].slice(0, 200) }, { status: 500 });
+  }
 
-  // Merge locked + suggestions and upsert into meal_plans
   const fullPlan = [...locked, ...suggestions];
-  await supabase.from("meal_plans").upsert({
+
+  // Delete existing plan for this week then insert fresh (avoids needing unique constraint)
+  await supabase.from("meal_plans").delete().eq("user_id", "demo").eq("week_start", weekStart);
+  const { error: insertError } = await supabase.from("meal_plans").insert({
     user_id: "demo",
     week_start: weekStart,
     plan: fullPlan,
-  }, { onConflict: "user_id,week_start" });
+  });
+  if (insertError) console.error("meal_plans insert error:", insertError);
 
   return NextResponse.json({ plan: fullPlan });
 }

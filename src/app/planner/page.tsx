@@ -49,6 +49,7 @@ export default function PlannerPage() {
   const [inventory, setInventory] = useState<InventoryItem[]>([]);
   const [plan, setPlan] = useState<Plan>({});
   const [filling, setFilling] = useState(false);
+  const [fillError, setFillError] = useState<string | null>(null);
   const [picker, setPicker] = useState<MealSlot | null>(null);
   const [saved, setSaved] = useState(false);
   const [addingToCart, setAddingToCart] = useState(false);
@@ -106,6 +107,7 @@ export default function PlannerPage() {
     setFilling(true);
     setSaved(false);
     setCartAdded(false);
+    setFillError(null);
     const locked: PlanEntry[] = [];
     const empty: MealSlot[] = [];
     DAYS.forEach((day) => {
@@ -129,6 +131,8 @@ export default function PlannerPage() {
       });
       setPlan(p);
       setSaved(true);
+    } else {
+      setFillError(data.error ?? "Auto-fill failed");
     }
     setFilling(false);
   }
@@ -193,6 +197,7 @@ export default function PlannerPage() {
       </div>
 
       {saved && <p className="mb-3 text-sm text-green-600 font-medium">✓ Plan saved</p>}
+      {fillError && <p className="mb-3 text-sm text-red-600 font-medium">Error: {fillError}</p>}
 
       {/* Calendar grid */}
       <div className="overflow-x-auto">
