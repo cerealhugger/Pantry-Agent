@@ -1,13 +1,46 @@
 "use client";
 
 import { FormEvent, useState } from "react";
+import { useRouter } from "next/navigation";
+import { createClient } from "@supabase/supabase-js";
 import type { BrowserbaseImportResult } from "@/lib/types";
 
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+const supabase = createClient<any>(
+  process.env.NEXT_PUBLIC_SUPABASE_URL!,
+  process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!
+);
+
 export default function ImportRecipePage() {
+  const router = useRouter();
   const [url, setUrl] = useState("");
   const [result, setResult] = useState<BrowserbaseImportResult | null>(null);
   const [error, setError] = useState("");
   const [loading, setLoading] = useState(false);
+  const [saving, setSaving] = useState(false);
+  const [savedId, setSavedId] = useState<string | null>(null);
+
+  async function handleSave() {
+    if (!result?.recipe) return;
+    setSaving(true);
+    const { data, error: dbError } = await supabase.from("recipes").insert({
+      user_id: "demo",
+      title: result.recipe.title,
+      ingredients: result.recipe.ingredients,
+      steps: result.recipe.steps,
+      calories_per_serving: result.recipe.calories_per_serving,
+      servings: result.recipe.servings,
+      tags: result.recipe.tags,
+      source_type: result.recipe.source_type,
+      source_url: result.inputUrl,
+    }).select().single();
+    setSaving(false);
+    if (dbError) {
+      alert("Failed to save: " + dbError.message);
+    } else {
+      setSavedId(data.id);
+    }
+  }
 
   async function handleSubmit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
@@ -70,10 +103,30 @@ export default function ImportRecipePage() {
             <section className="rounded-2xl border border-stone-200 bg-white p-6 shadow-sm">
               {result.recipe ? (
                 <>
-                  <p className="text-sm font-medium text-emerald-700">
-                    Extracted with {result.extractionMode}
-                  </p>
-                  <h2 className="mt-2 text-3xl font-bold">{result.recipe.title}</h2>
+                  <div className="flex items-start justify-between gap-4">
+                    <div>
+                      <p className="text-sm font-medium text-emerald-700">
+                        Extracted with {result.extractionMode}
+                      </p>
+                      <h2 className="mt-2 text-3xl font-bold">{result.recipe.title}</h2>
+                    </div>
+                    {savedId ? (
+                      <button
+                        onClick={() => router.push(`/recipes/${savedId}`)}
+                        className="flex-shrink-0 mt-2 rounded-xl bg-emerald-700 px-4 py-2 text-sm font-semibold text-white"
+                      >
+                        View in Recipes →
+                      </button>
+                    ) : (
+                      <button
+                        onClick={handleSave}
+                        disabled={saving}
+                        className="flex-shrink-0 mt-2 rounded-xl bg-emerald-700 px-4 py-2 text-sm font-semibold text-white disabled:opacity-60"
+                      >
+                        {saving ? "Saving…" : "Save to Recipes"}
+                      </button>
+                    )}
+                  </div>
                   <div className="mt-6">
                     <h3 className="text-lg font-semibold">Ingredients</h3>
                     <ul className="mt-3 space-y-2 text-stone-700">
