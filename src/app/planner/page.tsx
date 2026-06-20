@@ -1,5 +1,6 @@
 "use client";
 
+import Link from "next/link";
 import { useEffect, useState } from "react";
 import { createClient } from "@supabase/supabase-js";
 import type { Recipe, InventoryItem, Ingredient } from "@/lib/types";
@@ -62,6 +63,9 @@ export default function PlannerPage() {
   const [saved, setSaved] = useState(false);
   const [addingToCart, setAddingToCart] = useState(false);
   const [cartAdded, setCartAdded] = useState(false);
+  // per-meal "add missing to shopping list" state, keyed by `${day}-${meal}`
+  const [mealCartAdding, setMealCartAdding] = useState<string | null>(null);
+  const [mealCartAdded, setMealCartAdded] = useState<Record<string, boolean>>({});
 
   useEffect(() => {
     supabase.from("recipes").select("*").eq("user_id", "demo")
@@ -100,13 +104,16 @@ export default function PlannerPage() {
       ...prev,
       [key]: { day: picker.day, meal: picker.meal as "breakfast" | "lunch" | "dinner", recipe_id: recipe.id, recipe_title: recipe.title, reason: "Manually selected", locked: true },
     }));
+    setMealCartAdded((prev) => { const next = { ...prev }; delete next[key]; return next; });
     setPicker(null);
     setSaved(false);
     setCartAdded(false);
   }
 
   function handleClear(day: string, meal: string) {
-    setPlan((prev) => { const next = { ...prev }; delete next[`${day}-${meal}`]; return next; });
+    const key = `${day}-${meal}`;
+    setPlan((prev) => { const next = { ...prev }; delete next[key]; return next; });
+    setMealCartAdded((prev) => { const next = { ...prev }; delete next[key]; return next; });
     setSaved(false);
     setCartAdded(false);
   }
@@ -117,6 +124,7 @@ export default function PlannerPage() {
     setShortages([]);
     setSaved(false);
     setCartAdded(false);
+    setMealCartAdded({});
     await supabase.from("meal_plans").delete().eq("user_id", "demo").eq("week_start", weekStart);
   }
 
@@ -124,6 +132,7 @@ export default function PlannerPage() {
     setFilling(true);
     setSaved(false);
     setCartAdded(false);
+    setMealCartAdded({});
     setFillError(null);
     setShortages([]);
     const locked: PlanEntry[] = [];
@@ -190,6 +199,31 @@ export default function PlannerPage() {
     });
     setAddingToCart(false);
     setCartAdded(true);
+  }
+
+  // Add only THIS meal's missing ingredients to the shopping list
+  async function handleAddMealMissing(
+    day: string,
+    meal: string,
+    recipe: Recipe,
+    missing: Ingredient[]
+  ) {
+    if (!missing.length) return;
+    const key = `${day}-${meal}`;
+    setMealCartAdding(key);
+    const items: MissingIngredient[] = missing.map((ing) => ({
+      name: ing.name,
+      qty: ing.qty,
+      unit: ing.unit,
+      neededFor: [recipe.title],
+    }));
+    await fetch("/api/shopping-list", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ items }),
+    });
+    setMealCartAdding(null);
+    setMealCartAdded((prev) => ({ ...prev, [key]: true }));
   }
 
   const allMissing = recipes.length > 0 && inventory.length > 0 ? getAllMissing() : [];
@@ -308,42 +342,101 @@ export default function PlannerPage() {
                 return (
                   <div key={meal}>
                     {entry ? (
-                      <div className="relative flex gap-3 rounded-2xl border border-black/5 bg-white px-3.5 py-3 shadow-sm">
-                        <span
-                          className={`flex h-10 w-10 flex-shrink-0 items-center justify-center rounded-xl text-xl ${
-                            entry.locked ? "bg-brand-soft" : "bg-amber/20"
-                          }`}
-                        >
-                          {recipe ? foodEmoji(entry.recipe_title, null) : MEAL_EMOJI[meal]}
-                        </span>
-                        <div className="min-w-0 flex-1 pr-5">
-                          <p className="text-[10px] font-bold uppercase tracking-wide text-muted">
-                            {MEAL_EMOJI[meal]} {meal}
-                          </p>
-                          <p className="truncate font-semibold text-ink">{entry.recipe_title}</p>
-                          {!entry.locked && entry.reason && (
-                            <p className="mt-0.5 text-[11px] leading-tight text-brand">{entry.reason}</p>
-                          )}
-                          {missing.length > 0 && (
-                            <div className="mt-1.5 flex flex-wrap gap-1">
-                              {missing.map((m, mi) => (
-                                <span
-                                  key={`${m.name}-${mi}`}
-                                  className="rounded-full bg-coral/15 px-2 py-0.5 text-[10px] font-semibold text-coral"
-                                >
-                                  {m.name}
-                                </span>
-                              ))}
+                      <div className="relative rounded-2xl border border-black/5 bg-white px-3.5 py-3 shadow-sm">
+                        <div className="flex gap-3">
+                          {recipe ? (
+                            <Link
+                              href={`/recipes/${entry.recipe_id}`}
+                              className="flex min-w-0 flex-1 gap-3 pr-5 transition active:scale-[0.99]"
+                            >
+                              <span
+                                className={`flex h-10 w-10 flex-shrink-0 items-center justify-center rounded-xl text-xl ${
+                                  entry.locked ? "bg-brand-soft" : "bg-amber/20"
+                                }`}
+                              >
+                                {foodEmoji(entry.recipe_title, null)}
+                              </span>
+                              <div className="min-w-0 flex-1">
+                                <p className="text-[10px] font-bold uppercase tracking-wide text-muted">
+                                  {MEAL_EMOJI[meal]} {meal}
+                                </p>
+                                <p className="truncate font-semibold text-ink">
+                                  {entry.recipe_title}
+                                  <span className="ml-1 text-xs font-bold text-brand">→</span>
+                                </p>
+                                {!entry.locked && entry.reason && (
+                                  <p className="mt-0.5 text-[11px] leading-tight text-brand">{entry.reason}</p>
+                                )}
+                              </div>
+                            </Link>
+                          ) : (
+                            <div className="flex min-w-0 flex-1 gap-3 pr-5">
+                              <span className="flex h-10 w-10 flex-shrink-0 items-center justify-center rounded-xl bg-amber/20 text-xl">
+                                {MEAL_EMOJI[meal]}
+                              </span>
+                              <div className="min-w-0 flex-1">
+                                <p className="text-[10px] font-bold uppercase tracking-wide text-muted">
+                                  {MEAL_EMOJI[meal]} {meal}
+                                </p>
+                                <p className="truncate font-semibold text-ink">{entry.recipe_title}</p>
+                                <p className="mt-0.5 text-[11px] text-muted">Recipe unavailable</p>
+                              </div>
                             </div>
                           )}
+                          <button
+                            onClick={() => handleClear(day, meal)}
+                            aria-label="Remove meal"
+                            className="absolute right-2 top-2 rounded-full px-1.5 py-0.5 text-muted transition hover:text-coral"
+                          >
+                            ✕
+                          </button>
                         </div>
-                        <button
-                          onClick={() => handleClear(day, meal)}
-                          aria-label="Remove meal"
-                          className="absolute right-2 top-2 rounded-full px-1.5 py-0.5 text-muted transition hover:text-coral"
-                        >
-                          ✕
-                        </button>
+
+                        {/* pantry check: enough vs not enough + one-tap add missing */}
+                        {recipe && (
+                          <div className="mt-2.5 border-t border-black/5 pt-2.5">
+                            {missing.length === 0 ? (
+                              <p className="flex items-center gap-1.5 text-xs font-semibold text-brand">
+                                <span className="flex h-4 w-4 items-center justify-center rounded-full bg-brand text-[10px] text-white">
+                                  ✓
+                                </span>
+                                Pantry has everything
+                              </p>
+                            ) : (
+                              <>
+                                <div className="flex items-center justify-between gap-2">
+                                  <p className="text-xs font-bold text-coral">
+                                    Need {missing.length} item{missing.length !== 1 ? "s" : ""}
+                                  </p>
+                                  <button
+                                    onClick={() => handleAddMealMissing(day, meal, recipe, missing)}
+                                    disabled={
+                                      mealCartAdding === `${day}-${meal}` ||
+                                      mealCartAdded[`${day}-${meal}`]
+                                    }
+                                    className="flex-shrink-0 rounded-full bg-brand px-3 py-1 text-[11px] font-bold text-white transition active:scale-95 disabled:opacity-60"
+                                  >
+                                    {mealCartAdded[`${day}-${meal}`]
+                                      ? "✓ Added"
+                                      : mealCartAdding === `${day}-${meal}`
+                                      ? "Adding…"
+                                      : "+ Shopping list"}
+                                  </button>
+                                </div>
+                                <div className="mt-1.5 flex flex-wrap gap-1">
+                                  {missing.map((m, mi) => (
+                                    <span
+                                      key={`${m.name}-${mi}`}
+                                      className="rounded-full bg-coral/15 px-2 py-0.5 text-[10px] font-semibold text-coral"
+                                    >
+                                      {m.name}
+                                    </span>
+                                  ))}
+                                </div>
+                              </>
+                            )}
+                          </div>
+                        )}
                       </div>
                     ) : (
                       <button
