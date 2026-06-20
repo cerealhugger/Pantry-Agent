@@ -122,6 +122,11 @@ export type Database = {
         Insert: Omit<ShoppingListItem, "id" | "created_at">;
         Update: Partial<Omit<ShoppingListItem, "id" | "created_at">>;
       };
+      web_imports: {
+        Row: WebImport;
+        Insert: Omit<WebImport, "id" | "created_at">;
+        Update: Partial<Omit<WebImport, "id" | "created_at">>;
+      };
     };
   };
 };
