@@ -222,8 +222,8 @@ export default function PlannerPage() {
             ⚠ AI detected {shortages.length} potential ingredient shortage{shortages.length !== 1 ? "s" : ""} this week
           </p>
           <ul className="space-y-2">
-            {shortages.map((s) => (
-              <li key={s.ingredient} className="text-xs text-yellow-900">
+            {shortages.map((s, i) => (
+              <li key={`${s.ingredient}-${i}`} className="text-xs text-yellow-900">
                 <span className="font-semibold">{s.ingredient}</span>
                 {" — "}
                 {s.note}
@@ -268,8 +268,8 @@ export default function PlannerPage() {
                           )}
                           {missing.length > 0 && (
                             <div className="mt-1.5 flex flex-wrap gap-1">
-                              {missing.map((m) => (
-                                <span key={m.name} className="px-1.5 py-0.5 rounded-full bg-orange-100 text-orange-700 text-[10px] font-medium">
+                              {missing.map((m, mi) => (
+                                <span key={`${m.name}-${mi}`} className="px-1.5 py-0.5 rounded-full bg-orange-100 text-orange-700 text-[10px] font-medium">
                                   {m.name}
                                 </span>
                               ))}
@@ -305,8 +305,8 @@ export default function PlannerPage() {
               </p>
               <div className="mt-2 flex flex-wrap gap-1.5">
                 {/* Dedupe by name */}
-                {[...new Map(allMissing.map((m) => [m.name.toLowerCase(), m])).values()].map((m) => (
-                  <span key={m.name} className="px-2 py-0.5 rounded-full bg-orange-100 text-orange-700 text-xs font-medium border border-orange-200">
+                {[...new Map(allMissing.map((m) => [m.name.toLowerCase(), m])).values()].map((m, mi) => (
+                  <span key={`${m.name}-${mi}`} className="px-2 py-0.5 rounded-full bg-orange-100 text-orange-700 text-xs font-medium border border-orange-200">
                     {m.name}
                     {m.qty ? ` · ${m.qty}${m.unit ? " " + m.unit : ""}` : ""}
                   </span>
