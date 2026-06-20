@@ -27,9 +27,33 @@ export type Recipe = {
   calories_per_serving: number | null;
   servings: number | null;
   tags: string[];
-  source_type: "seed" | "manual" | "youtube" | "xiaohongshu";
+  source_type: "seed" | "manual" | "youtube" | "web_recipe" | "xiaohongshu";
   source_url: string | null;
+  browserbase_session_id: string | null;
+  browserbase_replay_url: string | null;
+  browserbase_live_url: string | null;
+  extraction_mode: string | null;
+  extraction_confidence: number | null;
+  source_metadata: Record<string, unknown>;
   created_at: string;
+};
+
+export type WebImport = {
+  id: string;
+  user_id: string;
+  input_url: string | null;
+  input_query: string | null;
+  import_type: "recipe_url" | "youtube" | "grocery_lookup" | "nutrition_lookup";
+  status: "pending" | "running" | "succeeded" | "failed";
+  browserbase_session_id: string | null;
+  browserbase_replay_url: string | null;
+  browserbase_live_url: string | null;
+  extraction_mode: string | null;
+  action_log: Array<{ step: number; action: string; result: string }>;
+  extracted_json: Record<string, unknown>;
+  error_message: string | null;
+  created_at: string;
+  completed_at: string | null;
 };
 
 export type DietLog = {
