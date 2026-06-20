@@ -1,1 +1,46 @@
 @import "tailwindcss";
+
+@theme {
+  --color-cream: #fbf8ef;
+  --color-cream-deep: #ece7da;
+  --color-brand: #1f9d6b;
+  --color-brand-dark: #16704a;
+  --color-brand-soft: #e7f4ec;
+  --color-coral: #ec6a4b;
+  --color-amber: #f8b65c;
+  --color-ink: #1a2421;
+  --color-muted: #6b7b73;
+}
+
+html,
+body {
+  background-color: var(--color-cream-deep);
+}
+
+::selection {
+  background-color: color-mix(in srgb, var(--color-brand) 22%, transparent);
+}
+
+.no-scrollbar::-webkit-scrollbar {
+  display: none;
+}
+.no-scrollbar {
+  -ms-overflow-style: none;
+  scrollbar-width: none;
+}
+
+/* version-proof gradients (Tailwind v4 renamed the bg-gradient-* utilities) */
+.bg-brand-grad {
+  background-image: linear-gradient(135deg, var(--color-brand) 0%, var(--color-brand-dark) 100%);
+}
+.bg-warm-grad {
+  background-image: linear-gradient(135deg, var(--color-amber) 0%, var(--color-coral) 100%);
+}
+
+/* reusable white surface */
+.card {
+  background-color: #ffffff;
+  border: 1px solid rgba(0, 0, 0, 0.05);
+  border-radius: 1rem;
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.04);
+}

@@ -8,60 +8,83 @@ function daysUntilExpiry(expiryDate: string | null): number | null {
   return Math.ceil(diff / (1000 * 60 * 60 * 24));
 }
 
-function ExpiryBadge({ days }: { days: number | null }) {
-  if (days === null) return null;
-
+function expiryStyle(days: number | null) {
+  if (days === null)
+    return { chip: "bg-black/5 text-muted", label: "No date", accent: "border-l-transparent" };
   if (days <= 0)
-    return <span className="px-2 py-0.5 rounded-full text-xs font-semibold bg-red-100 text-red-700">Expired</span>;
+    return { chip: "bg-coral/15 text-coral", label: "Expired", accent: "border-l-coral" };
   if (days <= 2)
-    return <span className="px-2 py-0.5 rounded-full text-xs font-semibold bg-red-100 text-red-700">Expires in {days}d ⚠️</span>;
-  if (days <= 7)
-    return <span className="px-2 py-0.5 rounded-full text-xs font-semibold bg-yellow-100 text-yellow-700">Expires in {days}d</span>;
-  return <span className="px-2 py-0.5 rounded-full text-xs font-semibold bg-green-100 text-green-700">Expires in {days}d</span>;
+    return { chip: "bg-coral/15 text-coral", label: `${days}d left`, accent: "border-l-coral" };
+  if (days <= 5)
+    return { chip: "bg-amber/25 text-[#a76a14]", label: `${days}d left`, accent: "border-l-amber" };
+  return { chip: "bg-brand-soft text-brand-dark", label: `${days}d`, accent: "border-l-transparent" };
 }
 
-function categoryColor(category: string | null): string {
+function categoryEmoji(category: string | null): string {
   switch (category) {
-    case "vegetable": return "bg-emerald-50 text-emerald-700";
-    case "meat":      return "bg-rose-50 text-rose-700";
-    case "dairy":     return "bg-blue-50 text-blue-700";
-    case "pantry":    return "bg-amber-50 text-amber-700";
-    default:          return "bg-gray-50 text-gray-600";
+    case "vegetable": return "🥬";
+    case "meat":      return "🍖";
+    case "dairy":     return "🧀";
+    case "pantry":    return "🫙";
+    default:          return "🍽️";
   }
 }
 
 export default function InventoryList({ items }: { items: InventoryItem[] }) {
   if (items.length === 0)
-    return <p className="text-gray-400 text-sm">No items in pantry.</p>;
+    return (
+      <div className="mt-12 flex flex-col items-center text-center">
+        <div className="flex h-20 w-20 items-center justify-center rounded-3xl bg-brand-soft text-4xl">🧺</div>
+        <p className="mt-4 font-semibold text-ink">Your pantry is empty</p>
+        <p className="mt-1 text-sm text-muted">Scan a receipt to add what you bought.</p>
+      </div>
+    );
+
+  const soon = items.filter((i) => {
+    const d = daysUntilExpiry(i.expiry_date);
+    return d !== null && d <= 2;
+  }).length;
 
   return (
-    <ul className="space-y-3">
-      {items.map((item) => {
-        const days = daysUntilExpiry(item.expiry_date);
-        const urgent = days !== null && days <= 2;
+    <div>
+      <div className="mb-4 flex flex-wrap gap-2">
+        <span className="rounded-full bg-white px-3 py-1 text-xs font-semibold text-ink shadow-sm">
+          {items.length} items
+        </span>
+        {soon > 0 && (
+          <span className="rounded-full bg-coral/15 px-3 py-1 text-xs font-semibold text-coral">
+            ⚠️ {soon} expiring soon
+          </span>
+        )}
+      </div>
 
-        return (
-          <li
-            key={item.id}
-            className={`flex items-center justify-between rounded-xl border px-4 py-3 ${
-              urgent ? "border-red-200 bg-red-50" : "border-gray-100 bg-white"
-            }`}
-          >
-            <div className="flex items-center gap-3">
-              <span className={`text-xs font-medium px-2 py-0.5 rounded-full ${categoryColor(item.category)}`}>
-                {item.category ?? "other"}
+      <ul className="space-y-2.5">
+        {items.map((item) => {
+          const days = daysUntilExpiry(item.expiry_date);
+          const s = expiryStyle(days);
+          return (
+            <li
+              key={item.id}
+              className={`flex items-center gap-3 rounded-2xl border border-black/5 border-l-4 bg-white px-3.5 py-3 shadow-sm ${s.accent}`}
+            >
+              <span className="flex h-11 w-11 flex-shrink-0 items-center justify-center rounded-xl bg-brand-soft text-2xl">
+                {categoryEmoji(item.category)}
               </span>
-              <span className="font-medium text-gray-900">{item.name}</span>
-              {item.quantity != null && (
-                <span className="text-sm text-gray-500">
-                  {item.quantity} {item.unit}
-                </span>
-              )}
-            </div>
-            <ExpiryBadge days={days} />
-          </li>
-        );
-      })}
-    </ul>
+              <div className="min-w-0 flex-1">
+                <p className="truncate font-semibold text-ink">{item.name}</p>
+                <p className="text-xs text-muted">
+                  {item.quantity != null
+                    ? `${item.quantity} ${item.unit ?? ""}`.trim()
+                    : item.category ?? "—"}
+                </p>
+              </div>
+              <span className={`flex-shrink-0 rounded-full px-2.5 py-1 text-xs font-bold ${s.chip}`}>
+                {s.label}
+              </span>
+            </li>
+          );
+        })}
+      </ul>
+    </div>
   );
 }
