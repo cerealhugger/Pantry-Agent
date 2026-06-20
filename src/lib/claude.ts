@@ -42,5 +42,9 @@ ${rawText}`,
   const text = message.content[0].type === "text" ? message.content[0].text : "";
   const match = text.match(/\{[\s\S]*\}/);
   if (!match) throw new Error("Claude did not return valid JSON");
-  return JSON.parse(match[0]) as NormalizedRecipe;
+  const result = JSON.parse(match[0]) as NormalizedRecipe;
+  if (!result.title || result.title === "Unknown" || result.ingredients.length === 0) {
+    throw new Error("Claude could not find a recipe in the extracted content");
+  }
+  return result;
 }

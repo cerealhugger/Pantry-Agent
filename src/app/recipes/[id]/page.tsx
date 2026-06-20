@@ -70,17 +70,14 @@ export default async function RecipeDetailPage({ params }: { params: Promise<{ i
         </ol>
       </section>
 
-      {recipe.browserbase_session_id && (
+      {recipe.source_url && recipe.source_type !== "seed" && (
         <section className="mt-8 rounded-xl border border-blue-100 bg-blue-50 p-4 text-sm">
-          <h2 className="font-semibold text-blue-900 mb-2">Browserbase Import</h2>
-          <p className="text-blue-700 text-xs mb-1">Mode: {recipe.extraction_mode}</p>
-          <p className="text-blue-700 text-xs">Session: {recipe.browserbase_session_id}</p>
-          {recipe.browserbase_replay_url && (
-            <a href={recipe.browserbase_replay_url} target="_blank" rel="noopener noreferrer"
-              className="inline-block mt-2 text-xs text-blue-600 underline">
-              View Session Replay ↗
-            </a>
-          )}
+          <h2 className="font-semibold text-blue-900 mb-2">Imported via Browserbase</h2>
+          <p className="text-blue-700 text-xs">Source: {recipe.source_type}</p>
+          <a href={recipe.source_url} target="_blank" rel="noopener noreferrer"
+            className="inline-block mt-2 text-xs text-blue-600 underline">
+            View original ↗
+          </a>
         </section>
       )}
     </main>
