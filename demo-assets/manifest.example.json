@@ -1,0 +1,68 @@
+{
+  "project": "PantryAgent",
+  "output": {
+    "aspect_ratio": "16:9",
+    "resolution": "1920x1080",
+    "fps": 30,
+    "target_duration_seconds": 120
+  },
+  "members": [
+    {
+      "id": "member-01",
+      "display_name": "",
+      "portrait": "people/member-01/portrait.jpg",
+      "voice_sample": "people/member-01/voice-sample.wav",
+      "final_read": "people/member-01/final-read.wav",
+      "consent": "people/member-01/consent.txt",
+      "voice_id": null,
+      "speech_output_url": null,
+      "avatar_output_url": null
+    },
+    {
+      "id": "member-02",
+      "display_name": "",
+      "portrait": "people/member-02/portrait.jpg",
+      "voice_sample": "people/member-02/voice-sample.wav",
+      "final_read": "people/member-02/final-read.wav",
+      "consent": "people/member-02/consent.txt",
+      "voice_id": null,
+      "speech_output_url": null,
+      "avatar_output_url": null
+    },
+    {
+      "id": "member-03",
+      "display_name": "",
+      "portrait": "people/member-03/portrait.jpg",
+      "voice_sample": "people/member-03/voice-sample.wav",
+      "final_read": "people/member-03/final-read.wav",
+      "consent": "people/member-03/consent.txt",
+      "voice_id": null,
+      "speech_output_url": null,
+      "avatar_output_url": null
+    },
+    {
+      "id": "member-04",
+      "display_name": "",
+      "portrait": "people/member-04/portrait.jpg",
+      "voice_sample": "people/member-04/voice-sample.wav",
+      "final_read": "people/member-04/final-read.wav",
+      "consent": "people/member-04/consent.txt",
+      "voice_id": null,
+      "speech_output_url": null,
+      "avatar_output_url": null
+    }
+  ],
+  "recordings": [
+    "recordings/01-receipt-to-pantry.mp4",
+    "recordings/02-recipe-import.mp4",
+    "recordings/03-plan-shop-eat.mp4"
+  ],
+  "brand": {
+    "logo": "brand/logo.png"
+  },
+  "renders": {
+    "cold_open_url": null,
+    "future_montage_url": null,
+    "final_video_url": null
+  }
+}

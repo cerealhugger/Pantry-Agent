@@ -24,3 +24,13 @@ npm-debug.log*
 # typescript
 *.tsbuildinfo
 next-env.d.ts
+
+# private demo identity sources
+# Keep member portraits, voice recordings, and consent files local.
+/demo-assets/people/**
+!/demo-assets/people/
+!/demo-assets/people/*/
+!/demo-assets/people/*/PLACE_FILES_HERE.md
+
+# The live manifest may contain names, voice IDs, and private asset URLs.
+/demo-assets/manifest.json
