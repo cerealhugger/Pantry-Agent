@@ -97,6 +97,20 @@ export default function PlannerPage() {
     return plan[`${day}-${meal}`] ?? null;
   }
 
+  function recipeCalories(recipe: Recipe | null): number | null {
+    return recipe?.source_metadata?.nutrition?.estimatedCaloriesPerServing ??
+      recipe?.calories_per_serving ??
+      null;
+  }
+
+  function eatenCaloriesForDay(day: string) {
+    return MEALS.reduce((total, meal) => {
+      const entry = slotEntry(day, meal);
+      if (!entry?.eaten) return total;
+      return total + (recipeCalories(getRecipe(entry.recipe_id)) ?? 0);
+    }, 0);
+  }
+
   function handleManualSelect(recipe: Recipe) {
     if (!picker) return;
     const key = `${picker.day}-${picker.meal}`;
@@ -347,13 +361,22 @@ export default function PlannerPage() {
 
       {/* vertical day-by-day plan */}
       <div className="mt-5 space-y-5">
-        {DAYS.map((day) => (
-          <section key={day}>
-            <h2 className="mb-2 flex items-center gap-2 text-sm font-bold text-ink/70">
-              <span className="h-1.5 w-1.5 rounded-full bg-brand" />
-              {day}
-            </h2>
-            <div className="space-y-2">
+        {DAYS.map((day) => {
+          const eatenCalories = eatenCaloriesForDay(day);
+          return (
+            <section key={day}>
+              <div className="mb-2 flex items-center justify-between gap-3">
+                <h2 className="flex items-center gap-2 text-sm font-bold text-ink/70">
+                  <span className="h-1.5 w-1.5 rounded-full bg-brand" />
+                  {day}
+                </h2>
+                {eatenCalories > 0 && (
+                  <span className="flex-shrink-0 text-xs font-semibold text-muted">
+                    {eatenCalories} kcal
+                  </span>
+                )}
+              </div>
+              <div className="space-y-2">
               {MEALS.map((meal) => {
                 const entry = slotEntry(day, meal);
                 const recipe = entry ? getRecipe(entry.recipe_id) : null;
@@ -517,7 +540,8 @@ export default function PlannerPage() {
               })}
             </div>
           </section>
-        ))}
+          );
+        })}
       </div>
 
       {/* recipe picker — bottom sheet */}
