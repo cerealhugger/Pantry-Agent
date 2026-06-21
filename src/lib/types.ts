@@ -71,6 +71,9 @@ export type NutritionEvidence = {
   ingredient: string;
   status: "verified" | "not_found";
   per100g: NutritionPer100g | null;
+  extractedFood?: string | null;
+  sourceBasis?: string | null;
+  servingSizeG?: number | null;
   sourceUrl: string | null;
   sourceTitle: string | null;
   confidence: "high" | "medium" | "low";
@@ -95,6 +98,7 @@ export type NutritionVerificationResult = {
 export type SavedNutrition = {
   estimatedCaloriesPerServing: number | null;
   confidence: "high" | "medium" | "low";
+  estimationMethod?: "browser_evidence" | "hybrid" | "ai_fallback";
   reasoning: string;
   evidence: NutritionEvidence[];
   verifiedAt: string;

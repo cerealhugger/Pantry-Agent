@@ -4,6 +4,7 @@ import { FormEvent, useState } from "react";
 import { useRouter } from "next/navigation";
 import { createClient } from "@supabase/supabase-js";
 import type { BrowserbaseImportResult } from "@/lib/types";
+import { NutritionEvidenceTable } from "@/components/NutritionEvidence";
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 const supabase = createClient<any>(
@@ -35,6 +36,8 @@ export default function ImportRecipePage() {
         tags: result.recipe.tags,
         source_type: result.recipe.source_type,
         source_url: result.inputUrl,
+        extraction_confidence: result.recipe.extraction_confidence ?? null,
+        source_metadata: result.recipe.source_metadata ?? {},
       })
       .select()
       .single();
@@ -74,6 +77,7 @@ export default function ImportRecipePage() {
   }
 
   const isYouTube = url.includes("youtube.com") || url.includes("youtu.be");
+  const importedNutrition = result?.recipe?.source_metadata?.nutrition;
 
   return (
     <main className="px-5 pt-5">
@@ -98,7 +102,7 @@ export default function ImportRecipePage() {
           disabled={loading || !url.trim()}
           className="whitespace-nowrap rounded-xl bg-brand px-4 py-3 text-sm font-bold text-white shadow-sm shadow-brand/25 transition active:scale-95 disabled:opacity-50"
         >
-          {loading ? "Importing…" : "Import"}
+          {loading ? "Importing + checking nutrition…" : "Import"}
         </button>
       </form>
 
@@ -151,6 +155,39 @@ export default function ImportRecipePage() {
               </div>
 
               <div className="px-4 py-4">
+                {result.recipe.calories_per_serving != null && (
+                  <div
+                    className={`mb-4 rounded-xl border px-3 py-3 ${
+                      importedNutrition
+                        ? "border-emerald-200 bg-emerald-50/70"
+                        : "border-black/5 bg-cream"
+                    }`}
+                  >
+                    <div className="flex flex-wrap items-baseline gap-x-3 gap-y-1">
+                      <p className="font-bold text-ink">
+                        {importedNutrition ? "Estimated calories" : "Page-reported calories"}: {result.recipe.calories_per_serving} kcal / serving
+                      </p>
+                      {importedNutrition && (
+                        <span className="text-xs font-semibold capitalize text-emerald-700">
+                          {importedNutrition.confidence} confidence
+                        </span>
+                      )}
+                    </div>
+                    {importedNutrition && (
+                      <>
+                        <p className="mt-1 text-xs text-muted">
+                          Source: {importedNutrition.estimationMethod === "ai_fallback"
+                            ? "AI estimate after Browserbase nutrition search"
+                            : importedNutrition.estimationMethod === "hybrid"
+                              ? "Browserbase evidence + AI fallback"
+                              : "Browserbase Search + Fetch evidence"}
+                        </p>
+                        <NutritionEvidenceTable evidence={importedNutrition.evidence} />
+                      </>
+                    )}
+                  </div>
+                )}
+
                 <p className="text-[11px] font-bold uppercase tracking-wider text-muted">
                   Ingredients
                 </p>

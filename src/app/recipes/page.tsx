@@ -138,6 +138,18 @@ function RecipeCards({
     <ul className="space-y-2.5">
       {recipes.map((r) => {
         const src = SOURCE_LABEL[r.source_type] ?? SOURCE_LABEL.seed;
+        const nutrition = r.source_metadata?.nutrition;
+        const nutritionSource = nutrition?.evidence.find(
+          (item) => item.status === "verified" && item.sourceUrl,
+        )?.sourceUrl;
+        let nutritionSourceHost: string | null = null;
+        if (nutritionSource) {
+          try {
+            nutritionSourceHost = new URL(nutritionSource).hostname.replace(/^www\./, "");
+          } catch {
+            nutritionSourceHost = "browser source";
+          }
+        }
         return (
           <li key={r.id} className="group relative">
             <Link
@@ -153,11 +165,18 @@ function RecipeCards({
                   <span className={`rounded-full px-1.5 py-0.5 font-semibold ${src.color}`}>
                     {src.label}
                   </span>
-                  {r.calories_per_serving != null && (
-                    <span>{r.calories_per_serving} kcal</span>
+                  {(nutrition?.estimatedCaloriesPerServing ?? r.calories_per_serving) != null && (
+                    <span>
+                      {nutrition?.estimatedCaloriesPerServing ?? r.calories_per_serving} kcal estimated
+                    </span>
                   )}
                   <span>· {((r.ingredients as unknown[]) ?? []).length} ingredients</span>
                 </div>
+                {nutrition && (
+                  <p className="mt-1 truncate text-[11px] font-medium text-emerald-700">
+                    {nutrition.confidence} confidence · source: {nutritionSourceHost ?? "AI fallback after Browserbase search"}
+                  </p>
+                )}
               </div>
               <span className="flex-shrink-0 text-muted">→</span>
             </Link>

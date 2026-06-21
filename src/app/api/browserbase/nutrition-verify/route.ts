@@ -2,6 +2,11 @@ import { NextRequest, NextResponse } from "next/server";
 import { createClient } from "@supabase/supabase-js";
 import { verifyIngredientNutrition } from "@/lib/browserbase";
 import { reconcileRecipeNutrition } from "@/lib/claude";
+import {
+  capConfidenceByEvidence,
+  nutritionEstimationMethod,
+  selectMajorNutritionIngredients,
+} from "@/lib/nutrition";
 import type {
   Ingredient,
   NutritionVerificationResult,
@@ -17,27 +22,6 @@ const supabase = createClient<any>(
   process.env.NEXT_PUBLIC_SUPABASE_URL!,
   process.env.SUPABASE_SERVICE_ROLE_KEY || process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!,
 );
-
-// Ingredients that rarely move the calorie needle or aren't real foods to search.
-const SKIP_INGREDIENTS = [
-  "water",
-  "salt",
-  "pepper",
-  "black pepper",
-  "ice",
-  "to taste",
-];
-
-function selectMajorIngredients(ingredients: Ingredient[]): string[] {
-  const names = ingredients
-    .map((i) => i.name?.trim())
-    .filter((n): n is string => Boolean(n))
-    .filter((n) => {
-      const lower = n.toLowerCase();
-      return !SKIP_INGREDIENTS.some((skip) => lower === skip || lower.includes(skip));
-    });
-  return [...new Set(names.map((n) => n.toLowerCase()))];
-}
 
 export async function POST(request: NextRequest) {
   let body: unknown;
@@ -60,6 +44,7 @@ export async function POST(request: NextRequest) {
     .from("recipes")
     .select("*")
     .eq("id", recipeId)
+    .eq("user_id", "demo")
     .single();
 
   if (recipeError || !recipe) {
@@ -67,7 +52,7 @@ export async function POST(request: NextRequest) {
   }
 
   const ingredients = (recipe.ingredients as Ingredient[]) ?? [];
-  const major = selectMajorIngredients(ingredients);
+  const major = selectMajorNutritionIngredients(ingredients);
 
   // Log one web_imports row per Browserbase run (CLAUDE.md: even if it fails).
   const { data: importRow } = await supabase
@@ -90,11 +75,19 @@ export async function POST(request: NextRequest) {
     .select("id")
     .single();
 
-  try {
-    const { evidence, actionLog, errorMessage } = await verifyIngredientNutrition(major);
+  let evidence: NutritionVerificationResult["evidence"] = [];
+  let actionLog: NutritionVerificationResult["actionLog"] = [];
 
-    if (errorMessage && evidence.length === 0) {
-      throw new Error(errorMessage);
+  try {
+    const verification = await verifyIngredientNutrition(major);
+    evidence = verification.evidence;
+    actionLog = verification.actionLog;
+
+    if (verification.errorMessage && evidence.length === 0) {
+      throw new Error(verification.errorMessage);
+    }
+    if (!evidence.some((item) => item.status === "verified")) {
+      throw new Error("Browserbase found no extractable nutrition facts for this recipe");
     }
 
     const reconciliation = await reconcileRecipeNutrition({
@@ -104,13 +97,18 @@ export async function POST(request: NextRequest) {
       evidence,
     });
 
+    const overallConfidence = capConfidenceByEvidence(
+      reconciliation.confidence,
+      evidence,
+      reconciliation.fallbackIngredientCount,
+    );
     const result: NutritionVerificationResult = {
       status: "succeeded",
       recipeTitle: recipe.title,
       servings: recipe.servings,
       aiCaloriesPerServing: recipe.calories_per_serving,
       estimatedCaloriesPerServing: reconciliation.estimated_calories_per_serving,
-      overallConfidence: reconciliation.confidence,
+      overallConfidence,
       reasoning: reconciliation.reasoning,
       evidence,
       actionLog,
@@ -119,7 +117,11 @@ export async function POST(request: NextRequest) {
     // Persist onto the recipe so cards and the planner can show evidence.
     const savedNutrition: SavedNutrition = {
       estimatedCaloriesPerServing: reconciliation.estimated_calories_per_serving,
-      confidence: reconciliation.confidence,
+      confidence: overallConfidence,
+      estimationMethod: nutritionEstimationMethod(
+        evidence,
+        reconciliation.fallbackIngredientCount,
+      ),
       reasoning: reconciliation.reasoning,
       evidence,
       verifiedAt: new Date().toISOString(),
@@ -127,15 +129,18 @@ export async function POST(request: NextRequest) {
     const existingMeta =
       (recipe.source_metadata as Record<string, unknown> | null) ?? {};
     const confidenceScore = { high: 0.9, medium: 0.6, low: 0.3 }[
-      reconciliation.confidence
+      overallConfidence
     ];
-    await supabase
+    const { error: updateError } = await supabase
       .from("recipes")
       .update({
         extraction_confidence: confidenceScore,
         source_metadata: { ...existingMeta, nutrition: savedNutrition },
       } as Partial<Recipe>)
       .eq("id", recipeId);
+    if (updateError) {
+      throw new Error(`Could not attach nutrition evidence to recipe: ${updateError.message}`);
+    }
 
     if (importRow?.id) {
       await supabase
@@ -172,8 +177,8 @@ export async function POST(request: NextRequest) {
       estimatedCaloriesPerServing: null,
       overallConfidence: "low",
       reasoning: "",
-      evidence: [],
-      actionLog: [],
+      evidence,
+      actionLog,
       errorMessage: message,
     };
     return NextResponse.json(result, { status: 422 });

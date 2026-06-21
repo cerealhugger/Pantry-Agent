@@ -398,6 +398,12 @@ const TRUSTED_NUTRITION_DOMAINS = [
   "calorieking.com",
 ];
 
+const NUTRITION_CACHE_TTL_MS = 6 * 60 * 60 * 1_000;
+const nutritionEvidenceCache = new Map<
+  string,
+  { evidence: NutritionEvidence; expiresAt: number }
+>();
+
 function hostOf(url: string): string {
   try {
     return new URL(url).hostname.toLowerCase();
@@ -407,29 +413,47 @@ function hostOf(url: string): string {
 }
 
 function isTrustedNutritionHost(host: string): boolean {
-  return TRUSTED_NUTRITION_DOMAINS.some((domain) => host.endsWith(domain));
+  return TRUSTED_NUTRITION_DOMAINS.some(
+    (domain) => host === domain || host.endsWith(`.${domain}`),
+  );
 }
 
 // Convert whatever serving basis the page reported into a clean per-100g panel.
 function toPer100g(value: z.infer<typeof nutritionResultSchema>): NutritionPer100g | null {
+  const basisGrams = value.basis?.match(/(?:^|[\s(])([\d.]+)\s*g(?:\b|\))/i)?.[1];
   const grams =
-    value.serving_size_g && value.serving_size_g > 0
-      ? value.serving_size_g
-      : /\b100\s*g\b/i.test(value.basis ?? "")
-        ? 100
-        : null;
+    /\b100\s*g\b/i.test(value.basis ?? "")
+      ? 100
+      : value.serving_size_g && value.serving_size_g > 0
+        ? value.serving_size_g
+        : basisGrams
+          ? Number(basisGrams)
+          : null;
   if (!grams || value.calories == null) return null;
 
   const factor = 100 / grams;
   const scale = (n: number | null) =>
     n == null ? null : Math.round(n * factor * 10) / 10;
 
-  return {
+  const panel = {
     calories: scale(value.calories),
     protein_g: scale(value.protein_g),
     carbs_g: scale(value.carbs_g),
     fat_g: scale(value.fat_g),
   };
+
+  const macros = [panel.protein_g, panel.carbs_g, panel.fat_g].filter(
+    (item): item is number => item != null,
+  );
+  if (
+    panel.calories == null ||
+    panel.calories > 1_000 ||
+    macros.some((item) => item > 100)
+  ) {
+    return null;
+  }
+
+  return panel;
 }
 
 function scoreNutritionConfidence(
@@ -453,10 +477,19 @@ async function verifyOneIngredient(
   addLog: (action: string, result: string) => void,
 ): Promise<NutritionEvidence> {
   const query = `${ingredient} nutrition facts calories protein carbs fat per 100g`;
+  const cached = nutritionEvidenceCache.get(ingredient);
+  if (cached && cached.expiresAt > Date.now()) {
+    addLog(`Nutrition cache: ${ingredient}`, "Reused recent Browserbase evidence");
+    return { ...cached.evidence, ingredient };
+  }
+  if (cached) nutritionEvidenceCache.delete(ingredient);
 
   let results: { url: string; title: string }[] = [];
   try {
-    const search = await browserbase.search.web({ query, numResults: 6 });
+    const search = await browserbase.search.web(
+      { query, numResults: 4 },
+      { timeout: 12_000, maxRetries: 0 },
+    );
     results = (search.results ?? [])
       .filter((r) => /^https?:\/\//i.test(r.url))
       .map((r) => ({ url: r.url, title: r.title }));
@@ -494,15 +527,18 @@ async function verifyOneIngredient(
     ...results.filter((r) => !isTrustedNutritionHost(hostOf(r.url))),
   ];
 
-  for (const candidate of ordered.slice(0, 3)) {
+  for (const candidate of ordered.slice(0, 2)) {
     const host = hostOf(candidate.url);
     try {
-      const response = await browserbase.fetchAPI.create({
-        url: candidate.url,
-        allowRedirects: true,
-        format: "json",
-        schema: nutritionJsonSchema,
-      });
+      const response = await browserbase.fetchAPI.create(
+        {
+          url: candidate.url,
+          allowRedirects: true,
+          format: "json",
+          schema: nutritionJsonSchema,
+        },
+        { timeout: 12_000, maxRetries: 0 },
+      );
 
       const parsed = nutritionResultSchema.safeParse(response.content);
       if (!parsed.success || response.statusCode < 200 || response.statusCode >= 300) {
@@ -521,15 +557,23 @@ async function verifyOneIngredient(
         `Fetch ${host}`,
         `Extracted ${per100g.calories} kcal/100g (confidence: ${confidence})`,
       );
-      return {
+      const evidence: NutritionEvidence = {
         ingredient,
         status: "verified",
         per100g,
+        extractedFood: parsed.data.food,
+        sourceBasis: parsed.data.basis,
+        servingSizeG: parsed.data.serving_size_g,
         sourceUrl: candidate.url,
         sourceTitle: candidate.title,
         confidence,
         extractionMode: "search+fetch",
       };
+      nutritionEvidenceCache.set(ingredient, {
+        evidence,
+        expiresAt: Date.now() + NUTRITION_CACHE_TTL_MS,
+      });
+      return evidence;
     } catch (error) {
       addLog(`Fetch ${host}`, `Skipped: ${errorMessage(error)}`);
     }
@@ -571,11 +615,18 @@ export async function verifyIngredientNutrition(ingredients: string[]): Promise<
   }
 
   const browserbase = new Browserbase({ apiKey });
-  const evidence: NutritionEvidence[] = [];
-  // Sequential keeps the action log readable and avoids hammering Search/Fetch.
-  for (const ingredient of cleaned) {
-    evidence.push(await verifyOneIngredient(browserbase, ingredient, addLog));
-  }
+  const evidence = new Array<NutritionEvidence>(cleaned.length);
+  let nextIndex = 0;
+  const workerCount = Math.min(4, cleaned.length);
+  await Promise.all(
+    Array.from({ length: workerCount }, async () => {
+      while (nextIndex < cleaned.length) {
+        const index = nextIndex;
+        nextIndex += 1;
+        evidence[index] = await verifyOneIngredient(browserbase, cleaned[index], addLog);
+      }
+    }),
+  );
 
   return { evidence, actionLog };
 }

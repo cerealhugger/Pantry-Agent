@@ -99,6 +99,7 @@ export default function NutritionSection({
             aiCaloriesPerServing={summary.ai}
             confidence={summary.confidence}
             reasoning={summary.reasoning}
+            hasBrowserEvidence={summary.evidence.some((item) => item.status === "verified")}
           />
           <NutritionEvidenceTable evidence={summary.evidence} />
         </div>

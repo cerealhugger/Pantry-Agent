@@ -3,10 +3,17 @@
 import Link from "next/link";
 import { useEffect, useState } from "react";
 import { createClient } from "@supabase/supabase-js";
-import type { Recipe, InventoryItem, Ingredient } from "@/lib/types";
+import type {
+  Recipe,
+  InventoryItem,
+  Ingredient,
+  NutritionVerificationResult,
+  SavedNutrition,
+} from "@/lib/types";
 import type { PlanEntry, MealSlot, IngredientShortage } from "@/app/api/planner/route";
 import type { MissingIngredient } from "@/app/api/shopping-list/route";
 import { foodEmoji } from "@/lib/food";
+import MealNutritionCard from "@/components/MealNutritionCard";
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 const supabase = createClient<any>(
@@ -66,6 +73,12 @@ export default function PlannerPage() {
   // per-meal "add missing to shopping list" state, keyed by `${day}-${meal}`
   const [mealCartAdding, setMealCartAdding] = useState<string | null>(null);
   const [mealCartAdded, setMealCartAdded] = useState<Record<string, boolean>>({});
+  const [nutritionVerifying, setNutritionVerifying] = useState<Record<string, boolean>>({});
+  const [nutritionErrors, setNutritionErrors] = useState<Record<string, string>>({});
+  const [verificationProgress, setVerificationProgress] = useState<{
+    done: number;
+    total: number;
+  } | null>(null);
 
   useEffect(() => {
     supabase.from("recipes").select("*").eq("user_id", "demo")
@@ -261,9 +274,86 @@ export default function PlannerPage() {
     }
   }
 
+  async function verifyRecipeNutrition(recipeId: string): Promise<boolean> {
+    setNutritionVerifying((previous) => ({ ...previous, [recipeId]: true }));
+    setNutritionErrors((previous) => {
+      const next = { ...previous };
+      delete next[recipeId];
+      return next;
+    });
+
+    try {
+      const response = await fetch("/api/browserbase/nutrition-verify", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ recipe_id: recipeId }),
+      });
+      const result = (await response.json()) as NutritionVerificationResult;
+      if (!response.ok || result.status !== "succeeded") {
+        throw new Error(result.errorMessage || "Nutrition verification failed");
+      }
+
+      const nutrition: SavedNutrition = {
+        estimatedCaloriesPerServing: result.estimatedCaloriesPerServing,
+        confidence: result.overallConfidence,
+        reasoning: result.reasoning,
+        evidence: result.evidence,
+        verifiedAt: new Date().toISOString(),
+      };
+      setRecipes((previous) =>
+        previous.map((recipe) =>
+          recipe.id === recipeId
+            ? {
+                ...recipe,
+                source_metadata: { ...recipe.source_metadata, nutrition },
+              }
+            : recipe,
+        ),
+      );
+      return true;
+    } catch (error) {
+      setNutritionErrors((previous) => ({
+        ...previous,
+        [recipeId]: error instanceof Error ? error.message : "Nutrition verification failed",
+      }));
+      return false;
+    } finally {
+      setNutritionVerifying((previous) => ({ ...previous, [recipeId]: false }));
+    }
+  }
+
+  async function handleVerifyPlanNutrition() {
+    const recipeIds = [...new Set(Object.values(plan).map((entry) => entry.recipe_id))];
+    const targets = recipeIds.filter(
+      (id) => !recipes.find((recipe) => recipe.id === id)?.source_metadata?.nutrition,
+    );
+    if (targets.length === 0) return;
+
+    setVerificationProgress({ done: 0, total: targets.length });
+    let nextIndex = 0;
+    let completed = 0;
+    const workerCount = Math.min(2, targets.length);
+    await Promise.all(
+      Array.from({ length: workerCount }, async () => {
+        while (nextIndex < targets.length) {
+          const index = nextIndex;
+          nextIndex += 1;
+          await verifyRecipeNutrition(targets[index]);
+          completed += 1;
+          setVerificationProgress({ done: completed, total: targets.length });
+        }
+      }),
+    );
+    setVerificationProgress(null);
+  }
+
   const allMissing = recipes.length > 0 && inventory.length > 0 ? getAllMissing() : [];
   const filledCount = Object.keys(plan).length;
   const totalSlots = DAYS.length * MEALS.length;
+  const plannedRecipeIds = [...new Set(Object.values(plan).map((entry) => entry.recipe_id))];
+  const unverifiedRecipeCount = plannedRecipeIds.filter(
+    (id) => !recipes.find((recipe) => recipe.id === id)?.source_metadata?.nutrition,
+  ).length;
 
   return (
     <main className="px-4 pt-4">
@@ -274,6 +364,19 @@ export default function PlannerPage() {
           Week of {weekStart} · {filledCount}/{totalSlots} slots filled
         </p>
       </div>
+
+      {filledCount > 0 && unverifiedRecipeCount > 0 && (
+        <button
+          type="button"
+          onClick={handleVerifyPlanNutrition}
+          disabled={verificationProgress !== null}
+          className="mt-2 w-full rounded-2xl border border-emerald-200 bg-emerald-50 py-2.5 text-sm font-bold text-emerald-800 transition active:scale-[0.99] disabled:opacity-60"
+        >
+          {verificationProgress
+            ? `Browserbase verifying ${verificationProgress.done}/${verificationProgress.total} recipes...`
+            : `Verify nutrition for ${unverifiedRecipeCount} planned recipe${unverifiedRecipeCount === 1 ? "" : "s"}`}
+        </button>
+      )}
 
       {/* action buttons */}
       <div className="grid grid-cols-3 gap-2">
@@ -409,18 +512,6 @@ export default function PlannerPage() {
                                   {entry.recipe_title}
                                   <span className="ml-1 text-xs font-bold text-brand">→</span>
                                 </p>
-                                {recipe?.source_metadata?.nutrition ? (
-                                  <p className="mt-0.5 text-[11px] font-medium leading-tight text-brand-dark">
-                                    {recipe.source_metadata.nutrition.estimatedCaloriesPerServing ?? "?"} kcal ·{" "}
-                                    {recipe.source_metadata.nutrition.confidence} ✓ verified
-                                  </p>
-                                ) : (
-                                  recipe?.calories_per_serving != null && (
-                                    <p className="mt-0.5 text-[11px] leading-tight text-muted">
-                                      {recipe.calories_per_serving} kcal
-                                    </p>
-                                  )
-                                )}
                                 {!entry.locked && entry.reason && (
                                   <p className="mt-0.5 text-[11px] leading-tight text-brand">{entry.reason}</p>
                                 )}
@@ -456,6 +547,15 @@ export default function PlannerPage() {
                             ✕
                           </button>
                         </div>
+
+                        {recipe && (
+                          <MealNutritionCard
+                            recipe={recipe}
+                            verifying={nutritionVerifying[recipe.id]}
+                            error={nutritionErrors[recipe.id]}
+                            onVerify={() => verifyRecipeNutrition(recipe.id)}
+                          />
+                        )}
 
                         {/* pantry check / eaten status */}
                         {entry.eaten ? (

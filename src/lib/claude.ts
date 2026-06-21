@@ -1,4 +1,6 @@
 import Anthropic from "@anthropic-ai/sdk";
+import { zodOutputFormat } from "@anthropic-ai/sdk/helpers/zod";
+import { z } from "zod";
 import type { Ingredient, NutritionEvidence } from "./types";
 
 const client = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY });
@@ -55,7 +57,25 @@ export type NutritionReconciliation = {
   estimated_calories_per_serving: number | null;
   confidence: "high" | "medium" | "low";
   reasoning: string;
+  browserEvidenceIngredientCount: number;
+  fallbackIngredientCount: number;
 };
+
+const ingredientEstimateSchema = z.object({
+  ingredient: z.string().trim().min(1),
+  estimated_weight_g: z.number().finite().positive().max(100_000).nullable(),
+  matched_evidence_ingredient: z.string().trim().min(1).nullable(),
+  fallback_calories_per_100g: z.number().finite().nonnegative().max(1_000).nullable(),
+});
+
+const nutritionEstimateSchema = z.object({
+  ingredient_estimates: z.array(ingredientEstimateSchema),
+  confidence: z.enum(["high", "medium", "low"]),
+});
+
+function normalizedName(value: string): string {
+  return value.toLowerCase().replace(/[^a-z0-9]+/g, " ").trim();
+}
 
 export async function reconcileRecipeNutrition(input: {
   title: string;
@@ -80,13 +100,7 @@ export async function reconcileRecipeNutrition(input: {
     .map((i) => `- ${i.raw ?? `${i.qty ?? ""} ${i.unit ?? ""} ${i.name}`.trim()}`)
     .join("\n");
 
-  const message = await client.messages.create({
-    model: "claude-sonnet-4-6",
-    max_tokens: 1024,
-    messages: [
-      {
-        role: "user",
-        content: `You estimate the calories of a recipe using browser-extracted nutrition evidence.
+  const prompt = `You map recipe quantities to browser-extracted nutrition evidence.
 
 Recipe: ${input.title}
 Servings: ${servings}
@@ -98,36 +112,99 @@ Browser-extracted per-100g nutrition evidence:
 ${evidenceLines || "(no verified evidence — rely on general knowledge)"}
 
 Task:
-1. For each ingredient, estimate its weight in grams from the recipe line.
-2. Multiply by the per-100g calories from the evidence above when the ingredient
-   is covered; otherwise use general nutrition knowledge.
-3. Sum total calories, then divide by ${servings} servings.
-4. Set confidence "high" if most calorie-significant ingredients are covered by
+1. For every recipe ingredient, estimate its edible weight in grams from the recipe line.
+2. If browser evidence covers it, copy the exact evidence ingredient name into
+   matched_evidence_ingredient and set fallback_calories_per_100g to null.
+3. If no evidence covers it, set matched_evidence_ingredient to null and estimate
+   fallback_calories_per_100g from general nutrition knowledge.
+4. Do not calculate ingredient calories or a recipe total. The application performs
+   all multiplication and addition deterministically.
+5. Set confidence "high" if most calorie-significant ingredients are covered by
    evidence, "medium" if some are, "low" if you mostly guessed.
 
 Return ONLY valid JSON — no markdown, no explanation:
 {
-  "estimated_calories_per_serving": number | null,
-  "confidence": "high" | "medium" | "low",
-  "reasoning": string
-}`,
-      },
-    ],
-  });
+  "ingredient_estimates": [
+    {
+      "ingredient": "<recipe ingredient name>",
+      "estimated_weight_g": number | null,
+      "matched_evidence_ingredient": "<exact evidence ingredient name>" | null,
+      "fallback_calories_per_100g": number | null
+    }
+  ],
+  "confidence": "high" | "medium" | "low"
+}`;
 
-  const text = message.content[0]?.type === "text" ? message.content[0].text : "";
-  const match = text.match(/\{[\s\S]*\}/);
-  if (!match) throw new Error("Claude did not return valid JSON for nutrition reconciliation");
-  const parsed = JSON.parse(match[0]) as NutritionReconciliation;
+  let parsed: z.infer<typeof nutritionEstimateSchema> | null = null;
+  let lastError: unknown;
+  for (const maxTokens of [4_096, 8_192]) {
+    try {
+      const message = await client.messages.parse({
+        model: "claude-sonnet-4-6",
+        max_tokens: maxTokens,
+        messages: [{ role: "user", content: prompt }],
+        output_config: {
+          format: zodOutputFormat(nutritionEstimateSchema),
+        },
+      });
+      parsed = message.parsed_output;
+      if (parsed) break;
+      lastError = new Error("Claude returned no parsed nutrition estimate");
+    } catch (error) {
+      lastError = error;
+    }
+  }
+  if (!parsed) {
+    throw lastError instanceof Error
+      ? lastError
+      : new Error("Claude did not return valid structured nutrition estimates");
+  }
+
+  const evidenceByName = new Map(
+    input.evidence
+      .filter((item) => item.status === "verified" && item.per100g?.calories != null)
+      .map((item) => [normalizedName(item.ingredient), item]),
+  );
+  let browserEvidenceCount = 0;
+  let fallbackCount = 0;
+  let totalCalories = 0;
+  let calculatedCount = 0;
+  const recipeIngredientNames = new Set(
+    input.ingredients.map((ingredient) => normalizedName(ingredient.name)),
+  );
+  const processedIngredients = new Set<string>();
+
+  for (const estimate of parsed.ingredient_estimates) {
+    if (estimate.estimated_weight_g == null) continue;
+    const directName = normalizedName(estimate.ingredient);
+    if (!recipeIngredientNames.has(directName) || processedIngredients.has(directName)) continue;
+    processedIngredients.add(directName);
+
+    // Evidence entries keep the exact ingredient names used in the recipe search.
+    // Match on that name rather than trusting a model-selected cross-ingredient mapping.
+    const browserEvidence = evidenceByName.get(directName);
+    const caloriesPer100g =
+      browserEvidence?.per100g?.calories ?? estimate.fallback_calories_per_100g;
+    if (caloriesPer100g == null) continue;
+
+    totalCalories += (estimate.estimated_weight_g / 100) * caloriesPer100g;
+    calculatedCount += 1;
+    if (browserEvidence) browserEvidenceCount += 1;
+    else fallbackCount += 1;
+  }
+
+  const estimatedCaloriesPerServing =
+    calculatedCount > 0 ? Math.round(totalCalories / servings) : null;
+  const reasoning =
+    estimatedCaloriesPerServing == null
+      ? "Not enough quantity information to calculate a per-serving estimate."
+      : `Programmatic total from estimated ingredient weights: ${Math.round(totalCalories)} kcal across ${servings} serving${servings === 1 ? "" : "s"}. Browser-extracted per-100g facts covered ${browserEvidenceCount} calculated ingredient${browserEvidenceCount === 1 ? "" : "s"}${fallbackCount > 0 ? `; ${fallbackCount} used general nutrition fallback values` : ""}.`;
+
   return {
-    estimated_calories_per_serving:
-      typeof parsed.estimated_calories_per_serving === "number"
-        ? Math.round(parsed.estimated_calories_per_serving)
-        : null,
-    confidence:
-      parsed.confidence === "high" || parsed.confidence === "low"
-        ? parsed.confidence
-        : "medium",
-    reasoning: typeof parsed.reasoning === "string" ? parsed.reasoning : "",
+    estimated_calories_per_serving: estimatedCaloriesPerServing,
+    confidence: parsed.confidence,
+    reasoning,
+    browserEvidenceIngredientCount: browserEvidenceCount,
+    fallbackIngredientCount: fallbackCount,
   };
 }

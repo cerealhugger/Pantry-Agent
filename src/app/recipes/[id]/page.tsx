@@ -24,6 +24,11 @@ export default async function RecipeDetailPage({ params }: { params: Promise<{ i
   const ingredients = (recipe.ingredients ?? []) as Ingredient[];
   const steps = (recipe.steps ?? []) as string[];
   const tags = (recipe.tags ?? []) as string[];
+  const nutrition = recipe.source_metadata?.nutrition;
+  const displayedCalories = nutrition?.estimatedCaloriesPerServing ?? recipe.calories_per_serving;
+  const hasBrowserNutritionEvidence = Boolean(
+    nutrition?.evidence.some((item) => item.status === "verified"),
+  );
 
   return (
     <main className="px-5 pt-5">
@@ -40,9 +45,12 @@ export default async function RecipeDetailPage({ params }: { params: Promise<{ i
         </span>
         <div className="min-w-0">
           <h1 className="text-2xl font-extrabold leading-tight tracking-tight text-ink">{recipe.title}</h1>
-          {recipe.calories_per_serving != null && (
+          {displayedCalories != null && (
             <p className="mt-0.5 text-sm text-muted">
-              {recipe.calories_per_serving} kcal · {recipe.servings} serving{recipe.servings !== 1 ? "s" : ""}
+              {displayedCalories} estimated kcal · {recipe.servings} serving{recipe.servings !== 1 ? "s" : ""}
+              {nutrition
+                ? ` · ${nutrition.confidence} confidence · ${hasBrowserNutritionEvidence ? "browser evidence" : "AI fallback after browser search"}`
+                : " · AI estimate"}
             </p>
           )}
         </div>

@@ -29,11 +29,13 @@ export function NutritionSummary({
   aiCaloriesPerServing,
   confidence,
   reasoning,
+  hasBrowserEvidence = true,
 }: {
   estimatedCaloriesPerServing: number | null;
   aiCaloriesPerServing: number | null;
   confidence: "high" | "medium" | "low";
   reasoning?: string;
+  hasBrowserEvidence?: boolean;
 }) {
   return (
     <div>
@@ -44,7 +46,7 @@ export function NutritionSummary({
         </span>
         <ConfidenceBadge confidence={confidence} />
         <span className="text-xs text-emerald-700 font-medium">
-          ✓ browser-verified
+          {hasBrowserEvidence ? "Browser evidence attached" : "AI fallback after Browserbase search"}
         </span>
       </div>
       {aiCaloriesPerServing != null &&
