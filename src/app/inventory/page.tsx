@@ -32,9 +32,7 @@ export default async function InventoryPage() {
   // Quick local heuristic: recipes that use up soon-to-expire items first.
   // Coexists with the AI planner (/planner) — this is the instant, zero-cost
   // "what can I cook right now" shortcut.
-  const recs = recommend(recipes, items)
-    .filter((r) => r.cov.expiringUsed > 0)
-    .slice(0, 3);
+  const recs = recommend(recipes, items).slice(0, 3);
 
   return (
     <main className="px-5 pt-5">
@@ -48,7 +46,7 @@ export default async function InventoryPage() {
       {recs.length > 0 && (
         <section className="mt-7">
           <div className="mb-2.5 flex items-center justify-between">
-            <h2 className="text-sm font-bold text-ink/70">Cook before it expires</h2>
+            <h2 className="text-sm font-bold text-ink/70">Recommended recipes</h2>
             <Link href="/planner" className="text-xs font-bold text-brand">
               Plan →
             </Link>
@@ -66,8 +64,14 @@ export default async function InventoryPage() {
                   <div className="min-w-0 flex-1">
                     <p className="truncate font-semibold text-ink">{recipe.title}</p>
                     <p className="mt-0.5 text-xs">
-                      <span className="rounded-full bg-amber/25 px-2 py-0.5 font-semibold text-[#a76a14]">
-                        uses {cov.expiringUsed} expiring
+                      <span className={`rounded-full px-2 py-0.5 font-semibold ${
+                        cov.expiringUsed > 0
+                          ? "bg-amber/25 text-[#a76a14]"
+                          : "bg-brand-soft text-brand-dark"
+                      }`}>
+                        {cov.expiringUsed > 0
+                          ? `uses ${cov.expiringUsed} expiring`
+                          : `${Math.round(cov.ratio * 100)}% pantry match`}
                       </span>
                     </p>
                   </div>

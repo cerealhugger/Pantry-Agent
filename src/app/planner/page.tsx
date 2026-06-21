@@ -438,11 +438,7 @@ export default function PlannerPage() {
                                   {MEAL_EMOJI[meal]} {meal}
                                 </p>
                                 <p className="truncate font-semibold text-ink">{entry.recipe_title}</p>
-                                {entry.eaten ? (
-                                  <p className="mt-0.5 text-[11px] font-semibold text-green-600">
-                                    ✓ Eaten · inventory updated
-                                  </p>
-                                ) : (
+                                {!entry.eaten && (
                                   <p className="mt-0.5 text-[11px] text-muted">Recipe unavailable</p>
                                 )}
                               </div>
