@@ -389,21 +389,17 @@ export default function PlannerPage() {
       {/* AI ingredient shortage warnings */}
       {shortages.length > 0 && (
         <div className="mt-4 rounded-2xl border border-amber/40 bg-amber/15 p-4">
-          <p className="text-sm font-bold text-ink">
-            ⚠ AI flagged {shortages.length} ingredient shortage{shortages.length !== 1 ? "s" : ""} this week
-          </p>
-          <ul className="mt-2 space-y-2">
+          <p className="mb-2 text-sm font-bold text-ink">⚠ May run short this week</p>
+          <div className="flex flex-wrap gap-1.5">
             {shortages.map((s, i) => (
-              <li key={`${s.ingredient}-${i}`} className="text-xs leading-snug text-ink/80">
-                <span className="font-semibold text-[#a76a14]">{s.ingredient}</span>
-                {" — "}
-                {s.note}
-                {s.usedInMeals.length > 0 && (
-                  <span className="ml-1 text-muted">(used in: {s.usedInMeals.join(", ")})</span>
-                )}
-              </li>
+              <span
+                key={`${s.ingredient}-${i}`}
+                className="rounded-full border border-amber/40 bg-white/60 px-2.5 py-0.5 text-xs font-semibold text-[#a76a14]"
+              >
+                {s.ingredient}
+              </span>
             ))}
-          </ul>
+          </div>
         </div>
       )}
 
