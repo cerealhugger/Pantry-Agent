@@ -284,12 +284,10 @@ export default function ImportRecipePage() {
       {!result && !loading && (
         <div className="mt-8 space-y-2">
           <p className="text-[11px] font-bold uppercase tracking-wider text-muted">
-            Try these
+            Try this
           </p>
           {[
-            "https://www.youtube.com/watch?v=dQw4w9WgXcQ",
-            "https://www.allrecipes.com/recipe/24074/alysons-broccoli-salad/",
-            "https://www.seriouseats.com/easy-pressure-cooker-chicken-tikka-masala",
+            "https://www.recipetineats.com/portuguese-chicken-and-rice-one-pot-recipe/",
           ].map((example) => (
             <button
               key={example}

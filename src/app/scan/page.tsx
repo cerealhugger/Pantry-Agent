@@ -107,7 +107,13 @@ export default function ScanPage() {
 
       // merge quantityText + unit into structured fields
       const combined = [item.quantityText, item.unit].filter(Boolean).join(" ").trim();
-      const { quantity, unit } = parseQuantity(combined || item.quantityText);
+      let { quantity, unit } = parseQuantity(combined || item.quantityText);
+
+      // if neither quantity nor unit was specified, default to 1 pcs
+      if (quantity == null && unit == null) {
+        quantity = 1;
+        unit = "pcs";
+      }
 
       return {
         user_id: "demo",

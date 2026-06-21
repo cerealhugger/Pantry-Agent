@@ -609,6 +609,8 @@ More technical version:
 
 - **One feature at a time.** Describe a single feature, review the diff, test it in the
   browser, commit, then move on. Don't ask for ten things at once.
+- **Commits require explicit manual approval.** Never run `git commit` (or `git push`)
+  without the user's explicit go-ahead each time — the user drives all git operations.
 - **Commit often** with clear messages.
 - **Suggested branch split for 4 people:**
   - `feature/inventory-spine` — Supabase schema, inventory, recipe list, meal plan.
@@ -620,6 +622,119 @@ More technical version:
 - **All Browserbase calls go through `lib/browserbase.ts`**, not scattered in components.
 - Keep it simple: prefer jsonb over new tables; don't add libraries we don't need.
 - Do not use Browserbase to bypass paywalls, scrape private data, or perform purchases.
+
+---
+
+## UI requirements & recurring decisions (DO NOT REGRESS)
+
+These are explicit product decisions from the user. They keep getting lost on
+`git reset` / `pull`, so they live here. Re-apply them if a merge/reset wipes them.
+
+### Pantry (inventory) page — `app/inventory` + `components/InventoryList.tsx`
+- **Search bar** at the top, filtering items by name or category (live).
+- **Manual "add ingredient"** affordance directly **below the search bar**: name +
+  category + quantity/unit + expires-in-days, inserts into `inventory_items` with
+  `purchase_date = today` and appears immediately. Do not remove this.
+- **Quantity/unit rule for add + edit** (`normalizeQtyUnit`): if **neither** quantity nor
+  unit is specified, default to **`1` qty + `pcs` unit**; a typed quantity **must be
+  positive** (> 0) — otherwise show "Quantity must be greater than 0." and disable
+  Add/Save. (Same default rule as receipt scanning.)
+- **Merge duplicates ("合并同类项")**: group items by name + unit, sum quantities, keep
+  soonest expiry + latest purchase date. The pantry must never show two rows of the same
+  item+unit.
+- **Item icons use `foodEmoji(name, category)`** from `lib/food.ts` (per-food, accurate),
+  NOT a generic category emoji. Generic category emoji is only for the add-form dropdown.
+  (Ingredient icons default to 🛒 grocery — see the icon-default rule in Design system.)
+- Items show an **"added today / added Mon D"** label from `purchase_date`.
+- **Category tabs** above the list: `All / Vegetable / Fruit / Meat / Seafood / Dairy /
+  Others`, each with a count, filtering the pantry to that category (still sorted by
+  expiry within it). "Others" catches anything not in the five main categories (null /
+  legacy `pantry`). Tabs combine with the search box. **No separate "N items" count
+  badge** — the `All (N)` tab already shows the total; only the "⚠️ N expiring soon" badge
+  remains (and only when something is expiring).
+- **Edit an existing item** ("✎" on each row): inline form to change name / qty / unit /
+  category / expiry date, plus a **Delete**. A pantry row is a *merged* group (may map to
+  several DB rows), so saving **deletes all underlying rows of that group and inserts one
+  consolidated row** (then it re-merges by the pantry rule). Do not remove this.
+- **Recommendation block** ("Recommended for you") **at the TOP of the page** (above the
+  pantry list), always visible (not gated on something expiring): top picks from
+  `recommend()` + two CTAs — "Start cooking → Meal Plan" (`/planner`) and "Pick what you
+  want → Recipes" (`/recipes`). Recommendation icons use `mealEmoji(title)` (meal object).
+- **Categories list = vegetable, fruit, meat, seafood, dairy, others** (use **"others"**,
+  NOT "pantry"). Legacy seed rows may still have category `pantry`; keep its emoji mapping.
+
+### Shopping list — `app/shopping` + `components/ShoppingList.tsx`
+- **Merge duplicates ("合并同类项")** in the display: one row per name + unit, summing
+  quantities. Buy / undo / remove act on the whole group (all underlying row ids).
+- Checking an item off **adds it to the pantry** (`inventory_items`) with
+  `purchase_date = today` (the merged/summed quantity), then it merges via the pantry rule.
+
+### Meal planner — `app/planner/page.tsx`
+- **Week strip + single-day view**: a 7-day strip (Mon–Sun) at the top of the plan; each
+  day shows its **calendar date** (day-of-month for the planned week, via `dayOfMonth`).
+  Tapping a day selects it and the page shows **only that day's** breakfast/lunch/dinner
+  cards. Default selected day = today (resolved on the client to avoid hydration mismatch).
+  (No filled-meal-count number and no cat/progress marker — both were removed.)
+- Each filled meal card: **links to the recipe**, shows a **pantry check** (has
+  everything / Need N items), and a per-meal **"+ Shopping list"** button.
+- Meal/recipe icons use `mealEmoji(title)` (meal object; default 🍽️ utensil). The
+  breakfast/lunch/dinner slot glyphs (`MEAL_EMOJI`) are separate and stay.
+- **Drag a meal to change its date**: meal cards are draggable (HTML5 DnD). Drop on
+  another **meal slot** in the same day to move/swap within the day; drop on a **day in the
+  week strip** to move the meal to that day (keeping its meal type). If a target slot is
+  filled the two **swap**, otherwise the source empties. Eaten meals are NOT draggable
+  (their pantry deduction + calorie log are tied to a specific day). Drag only edits local
+  state — the user still presses **Save plan** to persist.
+- **"N on shopping list" is a PENDING state, not done**: render it in orange (amber:
+  `text-[#a76a14]` + a `bg-amber` dot), with **no shopping-cart icon**. Do not use the
+  green/brand "done" styling for this line.
+- **Adding is a manual choice** — never auto-add missing ingredients. But once the user
+  DOES add them, covered ingredients **drop out of the "missing" display** (per-meal → that
+  meal shows "N on shopping list"; "Add all" → the whole "missing this week" block clears).
+- **Never auto-hide based on the shopping list.** The "missing" block must keep showing a
+  missing ingredient until the user *explicitly* adds it from the planner (per-meal or
+  "Add all"). Do NOT pre-seed coverage from the whole `shopping_list_items` table — that
+  hides items the user never chose and reads as auto-adding.
+- **The user's explicit adds persist across reloads (no 回退/revert)**: the added
+  quantities are saved to `localStorage` keyed by week (`pantryagent:added:${weekStart}`)
+  and rehydrated on load. So only what the user actually added from the planner stays out
+  of "missing" after a refresh; everything else still shows with its add button.
+- **Quantity-aware removal**: an ingredient leaves "missing" only when the quantity added
+  to the shopping list **covers (≥) the needed quantity** — not merely because the name was
+  added. Ingredients with no specified qty are covered by any amount.
+- The eaten state shows **only** "Eaten · ingredients deducted from pantry" in the status
+  row. Do NOT add a second "✓ Eaten · inventory updated" line under the title.
+- **"Eaten" and "Pantry has everything" are two distinct states.** When a meal block's
+  state is **eaten**, the **whole card greys out** (gray bg/border, muted text + icon) —
+  not the green styling. Green (brand) is reserved for the actionable "Pantry has
+  everything" / ready-to-eat state.
+
+### Scan a receipt — `app/scan/page.tsx`
+- On save, if an item has **neither quantity nor unit** specified, default to **`1` qty +
+  `pcs` unit** (so it still shows a sensible amount in the pantry).
+
+### Import a recipe — `app/import/page.tsx`
+- The example-link helper is **"Try this"** (singular) with a **single** link:
+  `https://www.recipetineats.com/portuguese-chicken-and-rice-one-pot-recipe/`. Don't
+  re-add the old three "Try these" links.
+
+### Icon defaults (objects → fallback icon) — `lib/food.ts`
+- Two object kinds, two fallbacks (used when no specific match is found):
+  - **Ingredient** (pantry / shopping list / missing ingredients) → `foodEmoji(name,
+    category)`, default **🛒 grocery**.
+  - **Meal** (recipe / meal-plan meal / pantry recommendation) → `mealEmoji(title)`,
+    default **🍽️ utensil**.
+- `mealEmoji` tries dish names first, then ingredient names, then the utensil default.
+  Don't reintroduce per-page inline emoji helpers — both pull from `lib/food.ts`.
+
+### Design system
+- Mobile shell (max-w-[440px], top logo header, bottom tab nav) from `feature/ui`.
+- Theme tokens in `globals.css`: cream / brand (green) / ink / muted / coral / amber,
+  plus `.card`, `.bg-brand-grad`, `.bg-warm-grad`. Use these, not gray-* palette.
+
+> **Working note:** When the user gives a new requirement, add it here so it survives
+> resets. main = source of truth for *functionality*; this list = source of truth for
+> these *UI decisions*.
 
 ---
 

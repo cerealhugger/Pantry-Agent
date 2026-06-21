@@ -3,17 +3,10 @@
 import Link from "next/link";
 import { useEffect, useState } from "react";
 import { createClient } from "@supabase/supabase-js";
-import type {
-  Recipe,
-  InventoryItem,
-  Ingredient,
-  NutritionVerificationResult,
-  SavedNutrition,
-} from "@/lib/types";
+import type { Recipe, InventoryItem, Ingredient } from "@/lib/types";
 import type { PlanEntry, MealSlot, IngredientShortage } from "@/app/api/planner/route";
 import type { MissingIngredient } from "@/app/api/shopping-list/route";
-import { foodEmoji } from "@/lib/food";
-import MealNutritionCard from "@/components/MealNutritionCard";
+import { mealEmoji } from "@/lib/food";
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 const supabase = createClient<any>(
@@ -22,6 +15,7 @@ const supabase = createClient<any>(
 );
 
 const DAYS = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"];
+const DAY_ABBR = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"];
 const MEALS = ["breakfast", "lunch", "dinner"] as const;
 
 const MEAL_EMOJI: Record<string, string> = {
@@ -29,6 +23,18 @@ const MEAL_EMOJI: Record<string, string> = {
   lunch: "🥗",
   dinner: "🍲",
 };
+
+// Calendar date (day-of-month) for the i-th day of the planned week.
+function dayOfMonth(weekStart: string, offset: number): number {
+  const [y, m, d] = weekStart.split("-").map(Number);
+  const dt = new Date(y, m - 1, d);
+  dt.setDate(dt.getDate() + offset);
+  return dt.getDate();
+}
+
+// localStorage key for the ingredients the user explicitly put on the shopping
+// list from the planner this week (drives the "missing" block's persistence).
+const addedKey = (weekStart: string) => `pantryagent:added:${weekStart}`;
 
 function getNextMonday() {
   const d = new Date();
@@ -67,18 +73,49 @@ export default function PlannerPage() {
   const [filling, setFilling] = useState(false);
   const [fillError, setFillError] = useState<string | null>(null);
   const [picker, setPicker] = useState<MealSlot | null>(null);
+  // which day's recipes are shown; defaults to today, resolved on the client to
+  // avoid SSR hydration mismatch.
+  const [selectedDay, setSelectedDay] = useState(DAYS[0]);
   const [saved, setSaved] = useState(false);
   const [addingToCart, setAddingToCart] = useState(false);
   const [cartAdded, setCartAdded] = useState(false);
-  // per-meal "add missing to shopping list" state, keyed by `${day}-${meal}`
+  // "adding…" spinner key, `${day}-${meal}`
   const [mealCartAdding, setMealCartAdding] = useState<string | null>(null);
-  const [mealCartAdded, setMealCartAdded] = useState<Record<string, boolean>>({});
-  const [nutritionVerifying, setNutritionVerifying] = useState<Record<string, boolean>>({});
-  const [nutritionErrors, setNutritionErrors] = useState<Record<string, string>>({});
-  const [verificationProgress, setVerificationProgress] = useState<{
-    done: number;
-    total: number;
-  } | null>(null);
+  // lowercased ingredient names the user has added to the shopping list this session.
+  // Once added, an ingredient drops out of the "missing" display.
+  // qty of each ingredient (by lowercased name) the user has added to the shopping list
+  // this session. An ingredient leaves "missing" only once its needed qty is covered.
+  const [addedQty, setAddedQty] = useState<Map<string, number>>(new Map());
+
+  // is this ingredient's needed quantity fully on the shopping list?
+  function isOnList(name: string, qty: number | null): boolean {
+    const have = addedQty.get(name.toLowerCase()) ?? 0;
+    if (qty == null) return have > 0; // no qty specified → any amount covers it
+    return have >= Number(qty);
+  }
+
+  // accumulate added quantities (null qty counts as +1 so it registers as covered)
+  // and persist to localStorage so the user's explicit adds survive a reload.
+  function recordAdded(ings: { name: string; qty: number | null }[]) {
+    setAddedQty((prev) => {
+      const next = new Map(prev);
+      for (const ing of ings) {
+        const k = ing.name.toLowerCase();
+        next.set(k, (next.get(k) ?? 0) + (ing.qty == null ? 1 : Number(ing.qty)));
+      }
+      try {
+        localStorage.setItem(addedKey(weekStart), JSON.stringify([...next]));
+      } catch {
+        /* ignore unavailable storage */
+      }
+      return next;
+    });
+  }
+
+  useEffect(() => {
+    const idx = (new Date().getDay() + 6) % 7; // JS Sun=0 → our Mon=0..Sun=6
+    setSelectedDay(DAYS[idx]);
+  }, []);
 
   useEffect(() => {
     supabase.from("recipes").select("*").eq("user_id", "demo")
@@ -89,6 +126,16 @@ export default function PlannerPage() {
     supabase.from("inventory_items").select("*").eq("user_id", "demo")
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
       .then(({ data }: any) => setInventory(data ?? []));
+
+    // Persist ONLY the ingredients the user explicitly added from the planner
+    // (not the whole shopping list) so the "missing" block doesn't revert on
+    // reload — and nothing is auto-hidden just for being on the shopping list.
+    try {
+      const raw = localStorage.getItem(addedKey(weekStart));
+      if (raw) setAddedQty(new Map(JSON.parse(raw) as [string, number][]));
+    } catch {
+      /* ignore malformed/unavailable storage */
+    }
 
     supabase.from("meal_plans").select("*").eq("user_id", "demo").eq("week_start", weekStart).single()
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -131,7 +178,6 @@ export default function PlannerPage() {
       ...prev,
       [key]: { day: picker.day, meal: picker.meal as "breakfast" | "lunch" | "dinner", recipe_id: recipe.id, recipe_title: recipe.title, reason: "Manually selected", locked: true },
     }));
-    setMealCartAdded((prev) => { const next = { ...prev }; delete next[key]; return next; });
     setPicker(null);
     setSaved(false);
     setCartAdded(false);
@@ -140,7 +186,29 @@ export default function PlannerPage() {
   function handleClear(day: string, meal: string) {
     const key = `${day}-${meal}`;
     setPlan((prev) => { const next = { ...prev }; delete next[key]; return next; });
-    setMealCartAdded((prev) => { const next = { ...prev }; delete next[key]; return next; });
+    setSaved(false);
+    setCartAdded(false);
+  }
+
+  // Drag a meal onto another slot to change its day/meal. If the target slot is
+  // filled, the two meals swap; otherwise the source slot empties.
+  function moveMeal(fromKey: string, toKey: string) {
+    if (fromKey === toKey) return;
+    setPlan((prev) => {
+      const fromEntry = prev[fromKey];
+      if (!fromEntry) return prev;
+      const [fd, fm] = fromKey.split("-");
+      const [td, tm] = toKey.split("-");
+      const next = { ...prev };
+      const toEntry = prev[toKey];
+      next[toKey] = { ...fromEntry, day: td, meal: tm as "breakfast" | "lunch" | "dinner" };
+      if (toEntry) {
+        next[fromKey] = { ...toEntry, day: fd, meal: fm as "breakfast" | "lunch" | "dinner" };
+      } else {
+        delete next[fromKey];
+      }
+      return next;
+    });
     setSaved(false);
     setCartAdded(false);
   }
@@ -151,7 +219,6 @@ export default function PlannerPage() {
     setShortages([]);
     setSaved(false);
     setCartAdded(false);
-    setMealCartAdded({});
     await supabase.from("meal_plans").delete().eq("user_id", "demo").eq("week_start", weekStart);
   }
 
@@ -159,7 +226,6 @@ export default function PlannerPage() {
     setFilling(true);
     setSaved(false);
     setCartAdded(false);
-    setMealCartAdded({});
     setFillError(null);
     setShortages([]);
     const locked: PlanEntry[] = [];
@@ -210,6 +276,7 @@ export default function PlannerPage() {
       if (!recipe) return;
       const missing = computeMissing(recipe, inventory);
       missing.forEach((ing) => {
+        if (isOnList(ing.name, ing.qty)) return; // needed qty already on the list
         result.push({ name: ing.name, qty: ing.qty, unit: ing.unit, neededFor: [recipe.title] });
       });
     });
@@ -225,6 +292,7 @@ export default function PlannerPage() {
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ items: missing }),
     });
+    recordAdded(missing);
     setAddingToCart(false);
     setCartAdded(true);
   }
@@ -250,8 +318,8 @@ export default function PlannerPage() {
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ items }),
     });
+    recordAdded(missing);
     setMealCartAdding(null);
-    setMealCartAdded((prev) => ({ ...prev, [key]: true }));
   }
 
   async function handleEat(day: string, meal: string) {
@@ -274,86 +342,9 @@ export default function PlannerPage() {
     }
   }
 
-  async function verifyRecipeNutrition(recipeId: string): Promise<boolean> {
-    setNutritionVerifying((previous) => ({ ...previous, [recipeId]: true }));
-    setNutritionErrors((previous) => {
-      const next = { ...previous };
-      delete next[recipeId];
-      return next;
-    });
-
-    try {
-      const response = await fetch("/api/browserbase/nutrition-verify", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ recipe_id: recipeId }),
-      });
-      const result = (await response.json()) as NutritionVerificationResult;
-      if (!response.ok || result.status !== "succeeded") {
-        throw new Error(result.errorMessage || "Nutrition verification failed");
-      }
-
-      const nutrition: SavedNutrition = {
-        estimatedCaloriesPerServing: result.estimatedCaloriesPerServing,
-        confidence: result.overallConfidence,
-        reasoning: result.reasoning,
-        evidence: result.evidence,
-        verifiedAt: new Date().toISOString(),
-      };
-      setRecipes((previous) =>
-        previous.map((recipe) =>
-          recipe.id === recipeId
-            ? {
-                ...recipe,
-                source_metadata: { ...recipe.source_metadata, nutrition },
-              }
-            : recipe,
-        ),
-      );
-      return true;
-    } catch (error) {
-      setNutritionErrors((previous) => ({
-        ...previous,
-        [recipeId]: error instanceof Error ? error.message : "Nutrition verification failed",
-      }));
-      return false;
-    } finally {
-      setNutritionVerifying((previous) => ({ ...previous, [recipeId]: false }));
-    }
-  }
-
-  async function handleVerifyPlanNutrition() {
-    const recipeIds = [...new Set(Object.values(plan).map((entry) => entry.recipe_id))];
-    const targets = recipeIds.filter(
-      (id) => !recipes.find((recipe) => recipe.id === id)?.source_metadata?.nutrition,
-    );
-    if (targets.length === 0) return;
-
-    setVerificationProgress({ done: 0, total: targets.length });
-    let nextIndex = 0;
-    let completed = 0;
-    const workerCount = Math.min(2, targets.length);
-    await Promise.all(
-      Array.from({ length: workerCount }, async () => {
-        while (nextIndex < targets.length) {
-          const index = nextIndex;
-          nextIndex += 1;
-          await verifyRecipeNutrition(targets[index]);
-          completed += 1;
-          setVerificationProgress({ done: completed, total: targets.length });
-        }
-      }),
-    );
-    setVerificationProgress(null);
-  }
-
   const allMissing = recipes.length > 0 && inventory.length > 0 ? getAllMissing() : [];
   const filledCount = Object.keys(plan).length;
   const totalSlots = DAYS.length * MEALS.length;
-  const plannedRecipeIds = [...new Set(Object.values(plan).map((entry) => entry.recipe_id))];
-  const unverifiedRecipeCount = plannedRecipeIds.filter(
-    (id) => !recipes.find((recipe) => recipe.id === id)?.source_metadata?.nutrition,
-  ).length;
 
   return (
     <main className="px-4 pt-4">
@@ -364,19 +355,6 @@ export default function PlannerPage() {
           Week of {weekStart} · {filledCount}/{totalSlots} slots filled
         </p>
       </div>
-
-      {filledCount > 0 && unverifiedRecipeCount > 0 && (
-        <button
-          type="button"
-          onClick={handleVerifyPlanNutrition}
-          disabled={verificationProgress !== null}
-          className="mt-2 w-full rounded-2xl border border-emerald-200 bg-emerald-50 py-2.5 text-sm font-bold text-emerald-800 transition active:scale-[0.99] disabled:opacity-60"
-        >
-          {verificationProgress
-            ? `Browserbase verifying ${verificationProgress.done}/${verificationProgress.total} recipes...`
-            : `Verify nutrition for ${unverifiedRecipeCount} planned recipe${unverifiedRecipeCount === 1 ? "" : "s"}`}
-        </button>
-      )}
 
       {/* action buttons */}
       <div className="grid grid-cols-3 gap-2">
@@ -462,9 +440,45 @@ export default function PlannerPage() {
         </p>
       )}
 
-      {/* vertical day-by-day plan */}
+      {/* week strip — pick a day to see its recipes; drop a meal on a day to move it */}
+      <div className="mt-5">
+        <div className="grid grid-cols-7 gap-1">
+          {DAYS.map((day, i) => {
+            const isSel = selectedDay === day;
+            return (
+              <button
+                key={day}
+                onClick={() => setSelectedDay(day)}
+                onDragOver={(e) => e.preventDefault()}
+                onDrop={(e) => {
+                  e.preventDefault();
+                  const from = e.dataTransfer.getData("text/plain");
+                  if (!from) return;
+                  const fromMeal = from.split("-")[1];
+                  moveMeal(from, `${day}-${fromMeal}`);
+                  setSelectedDay(day);
+                }}
+                className={`flex flex-col items-center rounded-xl py-2 transition active:scale-95 ${
+                  isSel ? "bg-brand text-white shadow-sm shadow-brand/25" : "bg-white text-ink shadow-sm"
+                }`}
+              >
+                <span className="text-[10px] font-bold uppercase tracking-wide">{DAY_ABBR[i]}</span>
+                <span
+                  className={`mt-1 flex h-5 w-5 items-center justify-center rounded-full text-[10px] font-bold ${
+                    isSel ? "bg-white/25 text-white" : "bg-brand-soft text-brand-dark"
+                  }`}
+                >
+                  {dayOfMonth(weekStart, i)}
+                </span>
+              </button>
+            );
+          })}
+        </div>
+      </div>
+
+      {/* selected day's plan */}
       <div className="mt-5 space-y-5">
-        {DAYS.map((day) => {
+        {DAYS.filter((day) => day === selectedDay).map((day) => {
           const eatenCalories = eatenCaloriesForDay(day);
           return (
             <section key={day}>
@@ -484,17 +498,35 @@ export default function PlannerPage() {
                 const entry = slotEntry(day, meal);
                 const recipe = entry ? getRecipe(entry.recipe_id) : null;
                 const missing = recipe && !entry?.eaten ? computeMissing(recipe, inventory) : [];
+                // still missing AND not yet added to the shopping list
+                const pending = missing.filter((m) => !isOnList(m.name, m.qty));
 
                 return (
-                  <div key={meal}>
+                  <div
+                    key={meal}
+                    onDragOver={(e) => e.preventDefault()}
+                    onDrop={(e) => {
+                      e.preventDefault();
+                      const from = e.dataTransfer.getData("text/plain");
+                      if (from) moveMeal(from, `${day}-${meal}`);
+                    }}
+                  >
                     {entry ? (
-                      <div className={`relative rounded-2xl border px-3.5 py-3 shadow-sm transition ${
-                        entry.eaten ? "border-green-200 bg-green-50" : "border-black/5 bg-white"
-                      }`}>
+                      <div
+                        draggable={!entry.eaten}
+                        onDragStart={(e) => {
+                          e.dataTransfer.setData("text/plain", `${day}-${meal}`);
+                          e.dataTransfer.effectAllowed = "move";
+                        }}
+                        className={`relative rounded-2xl border px-3.5 py-3 shadow-sm transition ${
+                          entry.eaten ? "border-black/10 bg-black/5 opacity-80" : "cursor-grab border-black/5 bg-white active:cursor-grabbing"
+                        }`}
+                      >
                         <div className="flex gap-3">
                           {recipe && !entry.eaten ? (
                             <Link
                               href={`/recipes/${entry.recipe_id}`}
+                              draggable={false}
                               className="flex min-w-0 flex-1 gap-3 pr-5 transition active:scale-[0.99]"
                             >
                               <span
@@ -502,7 +534,7 @@ export default function PlannerPage() {
                                   entry.locked ? "bg-brand-soft" : "bg-amber/20"
                                 }`}
                               >
-                                {foodEmoji(entry.recipe_title, null)}
+                                {mealEmoji(entry.recipe_title)}
                               </span>
                               <div className="min-w-0 flex-1">
                                 <p className="text-[10px] font-bold uppercase tracking-wide text-muted">
@@ -512,6 +544,18 @@ export default function PlannerPage() {
                                   {entry.recipe_title}
                                   <span className="ml-1 text-xs font-bold text-brand">→</span>
                                 </p>
+                                {recipe?.source_metadata?.nutrition ? (
+                                  <p className="mt-0.5 text-[11px] font-medium leading-tight text-brand-dark">
+                                    {recipe.source_metadata.nutrition.estimatedCaloriesPerServing ?? "?"} kcal ·{" "}
+                                    {recipe.source_metadata.nutrition.confidence} ✓ verified
+                                  </p>
+                                ) : (
+                                  recipe?.calories_per_serving != null && (
+                                    <p className="mt-0.5 text-[11px] leading-tight text-muted">
+                                      {recipe.calories_per_serving} kcal
+                                    </p>
+                                  )
+                                )}
                                 {!entry.locked && entry.reason && (
                                   <p className="mt-0.5 text-[11px] leading-tight text-brand">{entry.reason}</p>
                                 )}
@@ -520,20 +564,18 @@ export default function PlannerPage() {
                           ) : (
                             <div className="flex min-w-0 flex-1 gap-3 pr-5">
                               <span className={`flex h-10 w-10 flex-shrink-0 items-center justify-center rounded-xl text-xl ${
-                                entry.eaten ? "bg-green-100" : "bg-amber/20"
+                                entry.eaten ? "bg-black/10 grayscale" : "bg-amber/20"
                               }`}>
-                                {recipe ? foodEmoji(entry.recipe_title, null) : MEAL_EMOJI[meal]}
+                                {recipe ? mealEmoji(entry.recipe_title) : MEAL_EMOJI[meal]}
                               </span>
                               <div className="min-w-0 flex-1">
                                 <p className="text-[10px] font-bold uppercase tracking-wide text-muted">
                                   {MEAL_EMOJI[meal]} {meal}
                                 </p>
-                                <p className="truncate font-semibold text-ink">{entry.recipe_title}</p>
-                                {entry.eaten ? (
-                                  <p className="mt-0.5 text-[11px] font-semibold text-green-600">
-                                    ✓ Eaten · inventory updated
-                                  </p>
-                                ) : (
+                                <p className={`truncate font-semibold ${entry.eaten ? "text-muted" : "text-ink"}`}>
+                                  {entry.recipe_title}
+                                </p>
+                                {!recipe && !entry.eaten && (
                                   <p className="mt-0.5 text-[11px] text-muted">Recipe unavailable</p>
                                 )}
                               </div>
@@ -548,20 +590,11 @@ export default function PlannerPage() {
                           </button>
                         </div>
 
-                        {recipe && (
-                          <MealNutritionCard
-                            recipe={recipe}
-                            verifying={nutritionVerifying[recipe.id]}
-                            error={nutritionErrors[recipe.id]}
-                            onVerify={() => verifyRecipeNutrition(recipe.id)}
-                          />
-                        )}
-
                         {/* pantry check / eaten status */}
                         {entry.eaten ? (
-                          <div className="mt-2.5 border-t border-green-200 pt-2.5">
-                            <p className="flex items-center gap-1.5 text-xs font-semibold text-green-600">
-                              <span className="flex h-4 w-4 items-center justify-center rounded-full bg-green-600 text-[10px] text-white">✓</span>
+                          <div className="mt-2.5 border-t border-black/10 pt-2.5">
+                            <p className="flex items-center gap-1.5 text-xs font-semibold text-muted">
+                              <span className="flex h-4 w-4 items-center justify-center rounded-full bg-muted text-[10px] text-white">✓</span>
                               Eaten · ingredients deducted from pantry
                             </p>
                           </div>
@@ -582,26 +615,33 @@ export default function PlannerPage() {
                                   ✓ Ate this
                                 </button>
                               </div>
+                            ) : pending.length === 0 ? (
+                              // all missing items are now on the shopping list
+                              <div className="flex items-center justify-between">
+                                <p className="flex items-center gap-1.5 text-xs font-semibold text-[#a76a14]">
+                                  <span className="h-2 w-2 flex-shrink-0 rounded-full bg-amber" />
+                                  {missing.length} on shopping list
+                                </p>
+                                <Link
+                                  href="/shopping"
+                                  className="rounded-full border border-brand/25 bg-brand-soft px-3 py-1 text-[11px] font-bold text-brand-dark transition active:scale-95"
+                                >
+                                  View list →
+                                </Link>
+                              </div>
                             ) : (
                               <>
                                 <div className="flex items-center justify-between gap-2">
                                   <p className="text-xs font-bold text-coral">
-                                    Need {missing.length} item{missing.length !== 1 ? "s" : ""}
+                                    Need {pending.length} item{pending.length !== 1 ? "s" : ""}
                                   </p>
                                   <div className="flex gap-2">
                                     <button
-                                      onClick={() => handleAddMealMissing(day, meal, recipe, missing)}
-                                      disabled={
-                                        mealCartAdding === `${day}-${meal}` ||
-                                        mealCartAdded[`${day}-${meal}`]
-                                      }
+                                      onClick={() => handleAddMealMissing(day, meal, recipe, pending)}
+                                      disabled={mealCartAdding === `${day}-${meal}`}
                                       className="flex-shrink-0 rounded-full bg-brand px-3 py-1 text-[11px] font-bold text-white transition active:scale-95 disabled:opacity-60"
                                     >
-                                      {mealCartAdded[`${day}-${meal}`]
-                                        ? "✓ Added"
-                                        : mealCartAdding === `${day}-${meal}`
-                                        ? "Adding…"
-                                        : "+ Shopping list"}
+                                      {mealCartAdding === `${day}-${meal}` ? "Adding…" : "+ Shopping list"}
                                     </button>
                                     <button
                                       onClick={() => handleEat(day, meal)}
@@ -612,7 +652,7 @@ export default function PlannerPage() {
                                   </div>
                                 </div>
                                 <div className="mt-1.5 flex flex-wrap gap-1">
-                                  {missing.map((m, mi) => (
+                                  {pending.map((m, mi) => (
                                     <span
                                       key={`${m.name}-${mi}`}
                                       className="rounded-full bg-coral/15 px-2 py-0.5 text-[10px] font-semibold text-coral"
@@ -671,7 +711,7 @@ export default function PlannerPage() {
                       className="flex w-full items-center gap-3 rounded-2xl border border-black/5 bg-white px-3.5 py-3 text-left shadow-sm transition active:scale-[0.99]"
                     >
                       <span className="flex h-10 w-10 flex-shrink-0 items-center justify-center rounded-xl bg-brand-soft text-xl">
-                        {foodEmoji(r.title, null)}
+                        {mealEmoji(r.title)}
                       </span>
                       <div className="min-w-0 flex-1">
                         <p className="truncate font-semibold text-ink">{r.title}</p>

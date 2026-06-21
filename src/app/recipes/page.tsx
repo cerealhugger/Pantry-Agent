@@ -3,6 +3,7 @@
 import { useEffect, useMemo, useState } from "react";
 import { createClient } from "@supabase/supabase-js";
 import type { Recipe } from "@/lib/types";
+import { mealEmoji } from "@/lib/food";
 import Link from "next/link";
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -18,22 +19,6 @@ const SOURCE_LABEL: Record<string, { label: string; color: string }> = {
   manual: { label: "Manual", color: "bg-brand-soft text-brand-dark" },
   seed: { label: "Example", color: "bg-black/5 text-muted" },
 };
-
-// Inline emoji helper so recipe cards have a friendly icon without a cross-file dep.
-function recipeEmoji(title: string): string {
-  const n = (title ?? "").toLowerCase();
-  const map: [string, string][] = [
-    ["salad", "🥗"], ["soup", "🍲"], ["noodle", "🍜"], ["pasta", "🍝"],
-    ["rice", "🍚"], ["sushi", "🍣"], ["taco", "🌮"], ["burrito", "🌯"],
-    ["pizza", "🍕"], ["burger", "🍔"], ["sandwich", "🥪"], ["egg", "🍳"],
-    ["chicken", "🍗"], ["steak", "🥩"], ["beef", "🥩"], ["pork", "🥓"],
-    ["fish", "🐟"], ["salmon", "🐟"], ["shrimp", "🦐"], ["curry", "🍛"],
-    ["pancake", "🥞"], ["bread", "🍞"], ["cake", "🍰"], ["smoothie", "🥤"],
-    ["stir", "🥘"], ["fry", "🍳"], ["bowl", "🥣"], ["wrap", "🌯"],
-  ];
-  for (const [k, e] of map) if (n.includes(k)) return e;
-  return "🍽️";
-}
 
 export default function RecipesPage() {
   const [recipes, setRecipes] = useState<Recipe[]>([]);
@@ -157,7 +142,7 @@ function RecipeCards({
               className="flex items-center gap-3 rounded-2xl border border-black/5 bg-white px-3.5 py-3 shadow-sm transition active:scale-[0.99]"
             >
               <span className="flex h-11 w-11 flex-shrink-0 items-center justify-center rounded-xl bg-brand-soft text-2xl">
-                {recipeEmoji(r.title)}
+                {mealEmoji(r.title)}
               </span>
               <div className="min-w-0 flex-1">
                 <p className="truncate font-semibold text-ink">{r.title}</p>

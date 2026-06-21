@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useMemo, useState } from "react";
 import { supabase } from "@/lib/supabase";
 import type { ShoppingListItem } from "@/lib/types";
 import { foodEmoji } from "@/lib/food";
@@ -12,12 +12,43 @@ function doordashUrl(name: string) {
   return `https://www.doordash.com/search/store/${encodeURIComponent(name)}/`;
 }
 
+const todayStr = () => new Date().toISOString().split("T")[0];
+
+// One display row per ingredient (name + unit), summing quantities. Each group
+// remembers the underlying row ids so buy/undo/remove act on the whole group.
+type Group = {
+  key: string;
+  name: string;
+  unit: string | null;
+  quantity: number | null;
+  ids: string[];
+};
+
+function groupItems(items: ShoppingListItem[]): Group[] {
+  const map = new Map<string, Group>();
+  for (const it of items) {
+    const key = `${it.name.toLowerCase().trim()}|${it.unit ?? ""}`;
+    const g = map.get(key);
+    if (!g) {
+      map.set(key, { key, name: it.name, unit: it.unit, quantity: it.quantity, ids: [it.id] });
+    } else {
+      g.ids.push(it.id);
+      if (g.quantity != null && it.quantity != null) {
+        g.quantity = Number(g.quantity) + Number(it.quantity);
+      } else if (g.quantity == null) {
+        g.quantity = it.quantity;
+      }
+    }
+  }
+  return Array.from(map.values());
+}
+
 export default function ShoppingList({ initialItems }: { initialItems: ShoppingListItem[] }) {
   const [items, setItems] = useState<ShoppingListItem[]>(initialItems);
   const [draft, setDraft] = useState("");
 
-  const toBuy = items.filter((i) => !i.checked);
-  const bought = items.filter((i) => i.checked);
+  const toBuy = useMemo(() => groupItems(items.filter((i) => !i.checked)), [items]);
+  const bought = useMemo(() => groupItems(items.filter((i) => i.checked)), [items]);
 
   async function addItem() {
     const name = draft.trim();
@@ -32,11 +63,11 @@ export default function ShoppingList({ initialItems }: { initialItems: ShoppingL
     if (data) setItems((prev) => [data as ShoppingListItem, ...prev]);
   }
 
-  // bought → auto-add to pantry
-  async function buy(item: ShoppingListItem) {
-    setItems((prev) => prev.map((i) => (i.id === item.id ? { ...i, checked: true } : i)));
+  // bought → mark the whole group checked + add ONE merged row to the pantry
+  async function buy(group: Group) {
+    setItems((prev) => prev.map((i) => (group.ids.includes(i.id) ? { ...i, checked: true } : i)));
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    await (supabase.from("shopping_list_items") as any).update({ checked: true }).eq("id", item.id);
+    await (supabase.from("shopping_list_items") as any).update({ checked: true }).in("id", group.ids);
 
     const expiry = new Date();
     expiry.setDate(expiry.getDate() + 7);
@@ -44,26 +75,29 @@ export default function ShoppingList({ initialItems }: { initialItems: ShoppingL
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
       {
         user_id: "demo",
-        name: item.name,
-        quantity: item.quantity,
-        unit: item.unit,
+        name: group.name,
+        quantity: group.quantity,
+        unit: group.unit,
         category: null,
-        purchase_date: new Date().toISOString().split("T")[0],
+        purchase_date: todayStr(),
         expiry_date: expiry.toISOString().split("T")[0],
       } as any
     );
   }
 
-  async function undo(item: ShoppingListItem) {
-    setItems((prev) => prev.map((i) => (i.id === item.id ? { ...i, checked: false } : i)));
+  async function undo(group: Group) {
+    setItems((prev) => prev.map((i) => (group.ids.includes(i.id) ? { ...i, checked: false } : i)));
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    await (supabase.from("shopping_list_items") as any).update({ checked: false }).eq("id", item.id);
+    await (supabase.from("shopping_list_items") as any).update({ checked: false }).in("id", group.ids);
   }
 
-  async function remove(item: ShoppingListItem) {
-    setItems((prev) => prev.filter((i) => i.id !== item.id));
-    await supabase.from("shopping_list_items").delete().eq("id", item.id);
+  async function remove(group: Group) {
+    setItems((prev) => prev.filter((i) => !group.ids.includes(i.id)));
+    await supabase.from("shopping_list_items").delete().in("id", group.ids);
   }
+
+  const qtyLabel = (g: Group) =>
+    g.quantity != null ? `${g.quantity} ${g.unit ?? ""}`.trim() : null;
 
   return (
     <div>
@@ -98,34 +132,30 @@ export default function ShoppingList({ initialItems }: { initialItems: ShoppingL
         <>
           <h2 className="mb-2.5 text-xs font-bold uppercase tracking-wider text-muted">To buy ({toBuy.length})</h2>
           <ul className="space-y-2.5">
-            {toBuy.map((item) => (
-              <li key={item.id} className="rounded-2xl border border-black/5 bg-white p-3 shadow-sm">
+            {toBuy.map((group) => (
+              <li key={group.key} className="rounded-2xl border border-black/5 bg-white p-3 shadow-sm">
                 <div className="flex items-center gap-3">
                   <button
-                    onClick={() => buy(item)}
+                    onClick={() => buy(group)}
                     aria-label="Mark as bought"
                     className="flex h-6 w-6 flex-shrink-0 items-center justify-center rounded-full border-2 border-brand/40 text-xs font-bold text-transparent transition hover:bg-brand-soft"
                   >
                     ✓
                   </button>
                   <span className="flex h-9 w-9 flex-shrink-0 items-center justify-center rounded-lg bg-brand-soft text-lg">
-                    {foodEmoji(item.name, null)}
+                    {foodEmoji(group.name, null)}
                   </span>
                   <div className="min-w-0 flex-1">
-                    <p className="truncate font-semibold text-ink">{item.name}</p>
-                    {item.quantity != null && (
-                      <p className="text-xs text-muted">
-                        {item.quantity} {item.unit}
-                      </p>
-                    )}
+                    <p className="truncate font-semibold text-ink">{group.name}</p>
+                    {qtyLabel(group) && <p className="text-xs text-muted">{qtyLabel(group)}</p>}
                   </div>
-                  <button onClick={() => remove(item)} aria-label="Remove" className="px-1.5 text-muted transition hover:text-coral">
+                  <button onClick={() => remove(group)} aria-label="Remove" className="px-1.5 text-muted transition hover:text-coral">
                     ✕
                   </button>
                 </div>
                 <div className="mt-2 flex gap-2 pl-9">
                   <a
-                    href={amazonUrl(item.name)}
+                    href={amazonUrl(group.name)}
                     target="_blank"
                     rel="noopener noreferrer"
                     className="rounded-full bg-amber/20 px-3 py-1 text-xs font-semibold text-[#a76a14]"
@@ -133,7 +163,7 @@ export default function ShoppingList({ initialItems }: { initialItems: ShoppingL
                     Amazon ↗
                   </a>
                   <a
-                    href={doordashUrl(item.name)}
+                    href={doordashUrl(group.name)}
                     target="_blank"
                     rel="noopener noreferrer"
                     className="rounded-full bg-coral/15 px-3 py-1 text-xs font-semibold text-coral"
@@ -154,19 +184,19 @@ export default function ShoppingList({ initialItems }: { initialItems: ShoppingL
             Bought · added to pantry ({bought.length})
           </h2>
           <ul className="space-y-2">
-            {bought.map((item) => (
+            {bought.map((group) => (
               <li
-                key={item.id}
+                key={group.key}
                 className="flex items-center gap-3 rounded-2xl border border-black/5 bg-white/60 px-3.5 py-2.5"
               >
                 <button
-                  onClick={() => undo(item)}
+                  onClick={() => undo(group)}
                   aria-label="Move back to buy"
                   className="flex h-6 w-6 flex-shrink-0 items-center justify-center rounded-full bg-brand text-xs font-bold text-white"
                 >
                   ✓
                 </button>
-                <span className="flex-1 truncate font-medium text-muted line-through">{item.name}</span>
+                <span className="flex-1 truncate font-medium text-muted line-through">{group.name}</span>
               </li>
             ))}
           </ul>
